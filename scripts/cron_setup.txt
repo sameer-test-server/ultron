@@ -1,0 +1,1 @@
+30 6 * * * /home/sameer/ultron/.venv/bin/python /home/sameer/ultron/scripts/run_ultron.py >> /home/sameer/ultron/logs/cron.log 2>&1
