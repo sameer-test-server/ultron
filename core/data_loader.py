@@ -6,6 +6,11 @@ import socket
 import urllib.error
 import urllib.request
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+import smtplib
+import os
+from email.message import EmailMessage
 
 import pandas as pd
 import yfinance as yf
@@ -109,8 +114,17 @@ def _read_csv_from_url(url, timeout=20):
         url,
         headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return pd.read_csv(io.BytesIO(response.read()))
+    attempts = 3
+    backoff = 1.0
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return pd.read_csv(io.BytesIO(response.read()))
+        except Exception:
+            if attempt == attempts:
+                raise
+            time.sleep(backoff)
+            backoff *= 2
 
 
 def _host_resolves(host):
@@ -134,15 +148,24 @@ def _yahoo_dns_unavailable():
 
 def _download_from_yahoo(ticker, start_date, end_date):
     """Primary source: yfinance daily candles."""
-    downloaded = yf.download(
-        ticker,
-        start=start_date,
-        end=end_date,
-        interval="1d",
-        progress=False,
-        auto_adjust=False,
-    )
-    return _normalize_downloaded_data(downloaded)
+    attempts = 2
+    backoff = 1.0
+    for attempt in range(1, attempts + 1):
+        try:
+            downloaded = yf.download(
+                ticker,
+                start=start_date,
+                end=end_date,
+                interval="1d",
+                progress=False,
+                auto_adjust=False,
+            )
+            return _normalize_downloaded_data(downloaded)
+        except Exception:
+            if attempt == attempts:
+                raise
+            time.sleep(backoff)
+            backoff *= 2
 
 
 def _nse_bhavcopy_url(trade_date):
@@ -165,25 +188,32 @@ def _load_nse_bhavcopy_day(trade_date):
         headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"},
     )
 
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            payload = response.read()
-        with zipfile.ZipFile(io.BytesIO(payload)) as zipped:
-            csv_names = [name for name in zipped.namelist() if name.lower().endswith(".csv")]
-            if not csv_names:
+    attempts = 3
+    backoff = 1.0
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                payload = response.read()
+            with zipfile.ZipFile(io.BytesIO(payload)) as zipped:
+                csv_names = [name for name in zipped.namelist() if name.lower().endswith(".csv")]
+                if not csv_names:
+                    _NSE_BHAVCOPY_CACHE[trade_date] = None
+                    return None
+                with zipped.open(csv_names[0]) as handle:
+                    day_data = pd.read_csv(handle)
+            break
+        except urllib.error.HTTPError as error:
+            if error.code in (403, 404):
                 _NSE_BHAVCOPY_CACHE[trade_date] = None
                 return None
-            with zipped.open(csv_names[0]) as handle:
-                day_data = pd.read_csv(handle)
-    except urllib.error.HTTPError as error:
-        if error.code in (403, 404):
             _NSE_BHAVCOPY_CACHE[trade_date] = None
             return None
-        _NSE_BHAVCOPY_CACHE[trade_date] = None
-        return None
-    except Exception:
-        _NSE_BHAVCOPY_CACHE[trade_date] = None
-        return None
+        except Exception:
+            if attempt == attempts:
+                _NSE_BHAVCOPY_CACHE[trade_date] = None
+                return None
+            time.sleep(backoff)
+            backoff *= 2
 
     day_data.columns = [str(column).strip().upper() for column in day_data.columns]
     _NSE_BHAVCOPY_CACHE[trade_date] = day_data
@@ -284,6 +314,53 @@ def _download_from_stooq(ticker, start_date, end_date):
     return _empty_ohlcv_frame()
 
 
+def _download_from_alpha_vantage(ticker, start_date, end_date):
+    """Optional fallback: AlphaVantage CSV export if `ALPHAVANTAGE_API_KEY` is set.
+
+    AlphaVantage may not support all NSE symbols; this is a best-effort attempt.
+    """
+    api_key = os.environ.get("ALPHAVANTAGE_API_KEY")
+    if not api_key:
+        return _empty_ohlcv_frame()
+
+    # AlphaVantage expects symbol without country suffix in many cases; try variants.
+    candidates = [ticker, ticker.replace('.NS', ''), ticker.replace('.NS', '.BSE')]
+    for symbol in candidates:
+        url = (
+            f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED"
+            f"&symbol={symbol}&outputsize=full&datatype=csv&apikey={api_key}"
+        )
+        try:
+            df = _read_csv_from_url(url, timeout=20)
+        except Exception:
+            continue
+
+        if df.empty:
+            continue
+
+        # AlphaVantage CSV columns: timestamp, open, high, low, close, adjusted_close, volume, ...
+        renamed = {c: c for c in df.columns}
+        # Normalize to required columns
+        normalized = df.rename(columns={
+            df.columns[0]: "Date",
+            df.columns[1]: "Open",
+            df.columns[2]: "High",
+            df.columns[3]: "Low",
+            df.columns[4]: "Close",
+            df.columns[6]: "Volume",
+        })
+        normalized = normalized[["Date", "Open", "High", "Low", "Close", "Volume"]]
+        normalized["Date"] = pd.to_datetime(normalized["Date"], errors="coerce")
+        start_ts = pd.Timestamp(start_date)
+        end_ts = pd.Timestamp(end_date)
+        normalized = normalized[(normalized["Date"] >= start_ts) & (normalized["Date"] < end_ts)]
+        if normalized.empty:
+            continue
+        return normalized
+
+    return _empty_ohlcv_frame()
+
+
 def _download_with_fallback(ticker, start_date, end_date, allow_empty):
     """Attempt Yahoo first, then NSE Bhavcopy, then Stooq."""
     try:
@@ -302,8 +379,14 @@ def _download_with_fallback(ticker, start_date, end_date, allow_empty):
             _emit(f"Yahoo failed for {ticker}, attempting fallback")
         else:
             _emit(f"Yahoo failed for {ticker}, attempting fallback")
+    # If requested history is very large, limit per-source fallback window to recent 365 days
+    fallback_start = start_date
+    if days_requested > 365:
+        fallback_start = max(start_date, end_date - datetime.timedelta(days=365))
+        _emit(f"Fallback window limited to last 365 days for {ticker}")
 
-    nse_df = _download_from_nse_bhavcopy(ticker, start_date, end_date)
+    # Try NSE Bhavcopy using a limited window to avoid long per-day loops for multi-year rebuilds
+    nse_df = _download_from_nse_bhavcopy(ticker, fallback_start, end_date)
     if not nse_df.empty:
         _emit(f"Recovered via NSE for {ticker}")
         return nse_df, "nse"
@@ -312,7 +395,11 @@ def _download_with_fallback(ticker, start_date, end_date, allow_empty):
     if not stooq_df.empty:
         _emit(f"Recovered via Stooq for {ticker}")
         return stooq_df, "stooq"
-
+    # Try AlphaVantage if API key is set (optional premium fallback)
+    av_df = _download_from_alpha_vantage(ticker, fallback_start, end_date)
+    if not av_df.empty:
+        _emit(f"Recovered via AlphaVantage for {ticker}")
+        return av_df, "alphavantage"
     _emit(f"All data sources failed for {ticker}", level=logging.WARNING)
     return _empty_ohlcv_frame(), "failed"
 
@@ -386,7 +473,7 @@ def _update_single_ticker(ticker):
     return "failed" if source == "failed" else "updated"
 
 
-def update_all_data():
+def update_all_data(workers: int | None = None):
     """
     Main entry point.
     Updates all NIFTY50 ticker files without stopping on single-ticker failures.
@@ -401,19 +488,40 @@ def update_all_data():
         "status": "unknown",
     }
 
-    for ticker in NIFTY50_TICKERS:
-        try:
-            result = _update_single_ticker(ticker)
-        except Exception as error:
-            _emit(f"FAILED {ticker}: {error}", level=logging.WARNING)
-            result = "failed"
+    # If workers is provided and >1, perform parallel updates.
+    if workers and workers > 1:
+        futures = {}
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for ticker in NIFTY50_TICKERS:
+                futures[executor.submit(_update_single_ticker, ticker)] = ticker
+            for fut in as_completed(futures):
+                ticker = futures[fut]
+                try:
+                    result = fut.result()
+                except Exception as error:
+                    _emit(f"FAILED {ticker}: {error}", level=logging.WARNING)
+                    result = "failed"
 
-        if result == "updated":
-            summary["updated"] += 1
-        elif result == "up_to_date":
-            summary["up_to_date"] += 1
-        else:
-            summary["failed"] += 1
+                if result == "updated":
+                    summary["updated"] += 1
+                elif result == "up_to_date":
+                    summary["up_to_date"] += 1
+                else:
+                    summary["failed"] += 1
+    else:
+        for ticker in NIFTY50_TICKERS:
+            try:
+                result = _update_single_ticker(ticker)
+            except Exception as error:
+                _emit(f"FAILED {ticker}: {error}", level=logging.WARNING)
+                result = "failed"
+
+            if result == "updated":
+                summary["updated"] += 1
+            elif result == "up_to_date":
+                summary["up_to_date"] += 1
+            else:
+                summary["failed"] += 1
 
     if summary["failed"] == 0:
         summary["status"] = "success"
@@ -427,4 +535,76 @@ def update_all_data():
         f"{summary['status']} | total={summary['total']} "
         f"updated={summary['updated']} up_to_date={summary['up_to_date']} failed={summary['failed']}"
     )
+    # Persist failed ticker list for diagnostics
+    failed_names = [t for t in NIFTY50_TICKERS if _ticker_status(t, summary) == "failed"]
+    try:
+        if failed_names:
+            logs_dir = os.path.join(os.path.dirname(RAW_DATA_DIR), "logs")
+            os.makedirs(logs_dir, exist_ok=True)
+            fname = os.path.join(logs_dir, f"failed_tickers_{datetime.date.today().isoformat()}.txt")
+            with open(fname, "w", encoding="utf-8") as fh:
+                for t in failed_names:
+                    fh.write(t + "\n")
+            _emit(f"Wrote failed ticker list to {fname}", level=logging.WARNING)
+            # Attempt to send alert email if configured
+            alert_body = f"Ultron failed to update the following tickers on {datetime.date.today()}:\n\n"
+            for t in failed_names:
+                alert_body += f"  - {t}\n"
+            alert_body += f"\nCheck logs/failed_tickers_{datetime.date.today().isoformat()}.txt for details."
+            _send_alert_email(f"Ultron Alert: {len(failed_names)} Failed Tickers", alert_body)
+    except Exception:
+        pass
     return summary
+
+
+def _ticker_status(ticker, summary):
+    """Helper used to approximate per-ticker status when writing diagnostics."""
+    # This helper is a lightweight placeholder; callers should prefer direct results per-ticker.
+    # If a file exists and has recent data, treat as updated/up_to_date; otherwise failed.
+    csv_path = _ticker_csv_path(ticker)
+    if not os.path.exists(csv_path):
+        return "failed"
+    try:
+        df = pd.read_csv(csv_path, parse_dates=["Date"])
+        last = df["Date"].dropna().max()
+        if pd.isna(last):
+            return "failed"
+        if (datetime.date.today() - last.date()).days <= 3:
+            return "updated"
+        return "failed"
+    except Exception:
+        return "failed"
+
+
+def _send_alert_email(subject: str, body: str) -> bool:
+    """Send an alert email if SMTP credentials are configured via environment variables.
+
+    Expected env vars: ULTRON_SMTP_HOST, ULTRON_SMTP_PORT, ULTRON_SMTP_USER, ULTRON_SMTP_PASS, ULTRON_ALERT_TO
+    Returns True if email sent, False if not configured or on error.
+    """
+    smtp_host = os.environ.get("ULTRON_SMTP_HOST")
+    smtp_port = os.environ.get("ULTRON_SMTP_PORT", "587")
+    smtp_user = os.environ.get("ULTRON_SMTP_USER")
+    smtp_pass = os.environ.get("ULTRON_SMTP_PASS")
+    alert_to = os.environ.get("ULTRON_ALERT_TO")
+
+    if not all([smtp_host, smtp_user, smtp_pass, alert_to]):
+        return False
+
+    try:
+        port = int(smtp_port)
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = smtp_user
+        msg["To"] = alert_to
+        msg.set_content(body)
+
+        with smtplib.SMTP(smtp_host, port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+        _emit(f"Alert email sent to {alert_to}", level=logging.INFO)
+        return True
+    except Exception as e:
+        _emit(f"Failed to send alert email: {e}", level=logging.WARNING)
+        return False
