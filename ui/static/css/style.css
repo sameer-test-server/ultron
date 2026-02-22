@@ -1,0 +1,226 @@
+:root {
+    --bg: #f4f6fa;
+    --card: #ffffff;
+    --text: #1d2430;
+    --muted: #5f6977;
+    --border: #d8e0ea;
+    --long: #1f8a44;
+    --short: #c24b1f;
+    --header: #14213d;
+    --btn: #2056aa;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+}
+
+.site-header {
+    background: var(--header);
+    color: #fff;
+    padding: 1rem 0;
+}
+
+.site-header h1 {
+    margin: 0;
+}
+
+.site-header p {
+    margin: 0.2rem 0 0.6rem;
+    color: #d1d8e4;
+}
+
+.top-nav a {
+    color: #b8d6ff;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.container {
+    width: min(1240px, 94%);
+    margin: 0 auto;
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    margin: 1rem 0;
+}
+
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+.card h2 {
+    margin-top: 0;
+    font-size: 1.05rem;
+}
+
+.metric {
+    font-size: 1.9rem;
+    margin: 0;
+}
+
+.metric.small {
+    font-size: 0.95rem;
+}
+
+.long {
+    color: var(--long);
+    font-weight: 700;
+}
+
+.short {
+    color: var(--short);
+    font-weight: 700;
+}
+
+.regime {
+    padding: 0.15rem 0.45rem;
+    border-radius: 5px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    display: inline-block;
+}
+
+.regime.long {
+    color: #0f5d2c;
+    background: #dbf6e5;
+}
+
+.regime.short {
+    color: #7a2e12;
+    background: #ffe4d8;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+}
+
+th,
+td {
+    border: 1px solid var(--border);
+    padding: 0.55rem;
+    text-align: left;
+}
+
+th {
+    background: #eef3f9;
+}
+
+.click-row {
+    cursor: pointer;
+}
+
+.click-row:hover {
+    background: #f8fbff;
+}
+
+.warning {
+    border-left: 4px solid #d0831f;
+}
+
+.filter-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+    align-items: end;
+}
+
+.filter-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: 0.9rem;
+}
+
+.filter-form select,
+.filter-form button {
+    padding: 0.4rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #fff;
+}
+
+.filter-form button {
+    background: var(--btn);
+    color: #fff;
+    border-color: var(--btn);
+    cursor: pointer;
+}
+
+.split {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1rem;
+}
+
+.btn {
+    display: inline-block;
+    background: var(--btn);
+    color: #fff;
+    text-decoration: none;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    font-weight: 600;
+}
+
+.muted {
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+.plotly-wrapper {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.plotly-wrapper .plotly-graph-div {
+    min-width: 720px;
+}
+
+.disclaimer {
+    margin-top: 0.8rem;
+    border-top: 1px dashed var(--border);
+    padding-top: 0.7rem;
+    color: #5d2a1b;
+    font-weight: 600;
+}
+
+hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1rem 0;
+}
+
+@media (max-width: 740px) {
+    .metric {
+        font-size: 1.35rem;
+    }
+
+    table {
+        font-size: 0.86rem;
+    }
+
+    th,
+    td {
+        padding: 0.42rem;
+    }
+
+    .plotly-wrapper .plotly-graph-div {
+        min-width: 620px;
+    }
+}

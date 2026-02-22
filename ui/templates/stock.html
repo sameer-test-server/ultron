@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}{{ ticker }} Analysis{% endblock %}
+
+{% block head_extra %}
+{% if stock is not none %}
+<script>{{ plotly_js | safe }}</script>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+{% if stock is none %}
+<section class="card warning">
+    <h2>{{ ticker }} Unavailable</h2>
+    <p>Ultron could not load local data for this stock.</p>
+    <p><strong>Reason:</strong> {{ reason }}</p>
+</section>
+{% else %}
+<section class="card split">
+    <div>
+        <h2>Overview</h2>
+        <p><strong>Ticker:</strong> {{ stock.ticker }}</p>
+        <p>
+            <strong>Regime:</strong>
+            <span class="regime {{ 'long' if stock.regime == 'LONG_TERM' else 'short' }}">{{ stock.regime }}</span>
+        </p>
+        <p><strong>Confidence:</strong> {{ stock.confidence_label }} ({{ '%.2f'|format(stock.confidence) }})</p>
+        <p><strong>Volatility Level:</strong> {{ stock.volatility_label }} ({{ '%.1f'|format(stock.volatility_value * 100) }}%)</p>
+    </div>
+    <div>
+        <h2>Actions</h2>
+        <a class="btn" href="{{ url_for('export_pdf', ticker=stock.ticker) }}">Export Analysis to PDF</a>
+        <p class="muted">PDF includes overview, chart images, explanation, and paper trade summary.</p>
+    </div>
+</section>
+
+<section class="card">
+    <h2>Interactive Charts</h2>
+    <p class="muted">Use legend clicks to toggle SMA/EMA lines on/off. Hover for date and price details.</p>
+    <div class="plotly-wrapper">
+        {{ stock.interactive_chart_html | safe }}
+    </div>
+</section>
+
+<section class="card">
+    <h2>Analysis Explanation</h2>
+    <ul>
+        <li><strong>Trend:</strong> {{ stock.trend_note }}</li>
+        <li><strong>Momentum:</strong> {{ stock.momentum_note }}</li>
+        <li><strong>Volatility:</strong> {{ stock.volatility_note }}</li>
+    </ul>
+    <hr>
+    <ul>
+        {% for insight in stock.insights %}
+        <li>{{ insight }}</li>
+        {% endfor %}
+    </ul>
+    <p><strong>Label:</strong> Historical observation</p>
+    <p><strong>Label:</strong> Hypothetical scenario</p>
+    <p><strong>Label:</strong> Paper trade only</p>
+</section>
+
+<section class="card">
+    <h2>Paper Trade Simulation Panel</h2>
+    <p>
+        <strong>Virtual Capital:</strong> ₹{{ '%.2f'|format(stock.simulation.initial_capital) }} |
+        <strong>Final Capital:</strong> ₹{{ '%.2f'|format(stock.simulation.final_capital) }} |
+        <strong>Hypothetical Return:</strong> {{ '%.2f'|format(stock.hypothetical_return_pct) }}% |
+        <strong>Win Rate:</strong> {{ '%.1f'|format(stock.simulation.win_rate) }}%
+    </p>
+    <table>
+        <thead>
+            <tr>
+                <th>Entry Date</th>
+                <th>Entry Price</th>
+                <th>Exit Date</th>
+                <th>Exit Price</th>
+                <th>Hypothetical P/L %</th>
+                <th>Outcome</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for trade in stock.simulation.trades %}
+            <tr>
+                <td>{{ trade.entry_date }}</td>
+                <td>{{ '%.2f'|format(trade.entry_price) }}</td>
+                <td>{{ trade.exit_date }}</td>
+                <td>{{ '%.2f'|format(trade.exit_price) }}</td>
+                <td>{{ '%.2f'|format(trade.return_pct) }}%</td>
+                <td>{% if trade.profit_loss >= 0 %}<span class="long">Win</span>{% else %}<span class="short">Loss</span>{% endif %}</td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="6">No completed hypothetical trades for available history.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="disclaimer">
+        Disclaimer: This panel is for historical simulation and paper trade only. Ultron does not execute real trades.
+    </p>
+</section>
+{% endif %}
+{% endblock %}

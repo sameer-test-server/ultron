@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}Ultron Dashboard{% endblock %}
+
+{% block content %}
+<section class="summary-grid">
+    <article class="card">
+        <h2>Total Stocks</h2>
+        <p class="metric">{{ total_analyzed }}</p>
+    </article>
+    <article class="card">
+        <h2>LONG_TERM</h2>
+        <p class="metric long">{{ long_term_count }}</p>
+    </article>
+    <article class="card">
+        <h2>SHORT_TERM</h2>
+        <p class="metric short">{{ short_term_count }}</p>
+    </article>
+    <article class="card">
+        <h2>Best Hypothetical Return</h2>
+        <p class="metric long">{{ '%.2f'|format(best_return) }}%</p>
+    </article>
+    <article class="card">
+        <h2>Worst Hypothetical Return</h2>
+        <p class="metric short">{{ '%.2f'|format(worst_return) }}%</p>
+    </article>
+    <article class="card">
+        <h2>Last Run</h2>
+        <p class="metric small">{{ last_run.strftime('%Y-%m-%d %H:%M:%S') if last_run else 'Not available' }}</p>
+    </article>
+</section>
+
+<section class="card">
+    <h2>Interactive Filters</h2>
+    <form method="get" action="{{ url_for('index') }}" class="filter-form">
+        <label>
+            Regime
+            <select name="regime">
+                <option value="ALL" {% if regime_filter == 'ALL' %}selected{% endif %}>All</option>
+                <option value="LONG_TERM" {% if regime_filter == 'LONG_TERM' %}selected{% endif %}>LONG_TERM</option>
+                <option value="SHORT_TERM" {% if regime_filter == 'SHORT_TERM' %}selected{% endif %}>SHORT_TERM</option>
+            </select>
+        </label>
+
+        <label>
+            Sort By
+            <select name="sort">
+                <option value="highest_return" {% if sort_by == 'highest_return' %}selected{% endif %}>Highest hypothetical return</option>
+                <option value="lowest_risk" {% if sort_by == 'lowest_risk' %}selected{% endif %}>Lowest risk</option>
+                <option value="highest_confidence" {% if sort_by == 'highest_confidence' %}selected{% endif %}>Highest confidence</option>
+            </select>
+        </label>
+
+        <button type="submit">Apply</button>
+    </form>
+    <p class="muted">Showing {{ displayed_count }} stocks after filter/sort.</p>
+</section>
+
+<section class="card">
+    <h2>Stock Overview</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Ticker</th>
+                <th>Regime</th>
+                <th>Confidence</th>
+                <th>Volatility</th>
+                <th>Hypothetical Return</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for stock in stocks %}
+            <tr class="click-row" data-href="{{ url_for('stock_detail', ticker=stock.ticker) }}">
+                <td>{{ stock.ticker }}</td>
+                <td>
+                    <span class="regime {{ 'long' if stock.regime == 'LONG_TERM' else 'short' }}">
+                        {{ stock.regime }}
+                    </span>
+                </td>
+                <td>{{ stock.confidence_label }} ({{ '%.2f'|format(stock.confidence) }})</td>
+                <td>{{ stock.volatility_label }} ({{ '%.1f'|format(stock.volatility_value * 100) }}%)</td>
+                <td>{{ '%.2f'|format(stock.hypothetical_return_pct) }}%</td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5">No stocks match the selected filters.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+{% if errors %}
+<section class="card warning">
+    <h2>Skipped Stocks (Missing/Invalid Data)</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Ticker</th>
+                <th>Reason</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for ticker, reason in errors.items() %}
+            <tr>
+                <td>{{ ticker }}</td>
+                <td>{{ reason }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelectorAll('.click-row').forEach(function(row) {
+    row.addEventListener('click', function() {
+        window.location = row.dataset.href;
+    });
+});
+</script>
+{% endblock %}
