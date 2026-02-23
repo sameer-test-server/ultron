@@ -16,89 +16,813 @@
     <p><strong>Reason:</strong> {{ reason }}</p>
 </section>
 {% else %}
-<section class="card split">
-    <div>
-        <h2>Overview</h2>
-        <p><strong>Ticker:</strong> {{ stock.ticker }}</p>
-        <p>
-            <strong>Regime:</strong>
+{% set confidence_pct = (stock.confidence * 100)|round(0)|int %}
+{% set volatility_pct = (stock.volatility_value * 100)|round(1) %}
+{% set return_pct = stock.hypothetical_return_pct|round(2) %}
+{% set chart_window = chart_window if chart_window is defined else {'recent_start': '', 'recent_end': '', 'full_start': '', 'full_end': ''} %}
+{% set sim_defaults = sim_defaults if sim_defaults is defined else {'capital': 2000.0, 'position_size_pct': 100.0, 'brokerage_pct': 0.08, 'slippage_pct': 0.05, 'max_holding_days': 60, 'stop_loss_pct': 8.0, 'take_profit_pct': 18.0} %}
+{% set projection_defaults = projection_defaults if projection_defaults is defined else {'amount': 2000.0, 'horizons': [1, 5, 20], 'custom_horizon_days': 10} %}
+{% set stock_context_cards = stock_context_cards if stock_context_cards is defined else {} %}
+
+<section class="card stock-hero">
+    <div class="stock-hero-main">
+        <p class="eyebrow">Ultron Creative Deck</p>
+        <h2>{{ stock.ticker }}</h2>
+        <p class="muted">Narrative + signal + simulation in one interactive workspace.</p>
+        <div class="stock-badges">
             <span class="regime {{ 'long' if stock.regime == 'LONG_TERM' else 'short' }}">{{ stock.regime }}</span>
-        </p>
-        <p><strong>Confidence:</strong> {{ stock.confidence_label }} ({{ '%.2f'|format(stock.confidence) }})</p>
-        <p><strong>Volatility Level:</strong> {{ stock.volatility_label }} ({{ '%.1f'|format(stock.volatility_value * 100) }}%)</p>
+            <span class="stock-pill">Confidence: {{ stock.confidence_label }}</span>
+            <span class="stock-pill">Volatility: {{ stock.volatility_label }}</span>
+        </div>
+        <div class="stock-actions">
+            <a class="btn" href="{{ url_for('export_pdf', ticker=stock.ticker) }}">Export PDF</a>
+            <a class="btn btn-light" href="{{ url_for('index') }}">Back to Dashboard</a>
+        </div>
     </div>
-    <div>
-        <h2>Actions</h2>
-        <a class="btn" href="{{ url_for('export_pdf', ticker=stock.ticker) }}">Export Analysis to PDF</a>
-        <p class="muted">PDF includes overview, chart images, explanation, and paper trade summary.</p>
+
+    <div class="stock-hero-metrics">
+        <article class="stock-ring-card">
+            <p class="kpi-label">Confidence Meter</p>
+            <div class="confidence-ring" style="background: conic-gradient(#2d62b2 {{ confidence_pct }}%, #e8edf6 0);">
+                <div class="confidence-ring-inner">
+                    <span class="mono">{{ confidence_pct }}%</span>
+                </div>
+            </div>
+        </article>
+        <article class="stock-return-card">
+            <p class="kpi-label">Hypothetical Return</p>
+            <p class="{{ 'long' if return_pct >= 0 else 'short' }}">{{ '%.2f'|format(return_pct) }}%</p>
+            <div class="return-bar-track">
+                <span
+                    class="return-bar-fill {{ 'up' if return_pct >= 0 else 'down' }}"
+                    style="width: {{ [100, (return_pct|abs * 1.5)]|min }}%;"
+                ></span>
+            </div>
+            <p class="muted mono">Volatility {{ '%.1f'|format(volatility_pct) }}%</p>
+        </article>
     </div>
 </section>
 
-<section class="card">
-    <h2>Interactive Charts</h2>
-    <p class="muted">Use legend clicks to toggle SMA/EMA lines on/off. Hover for date and price details.</p>
-    <div class="plotly-wrapper">
-        {{ stock.interactive_chart_html | safe }}
+<section class="card stock-signal-board">
+    <div class="section-head">
+        <h2>Signal Board</h2>
+    </div>
+    <div class="signal-grid">
+        <article class="signal-item">
+            <p class="kpi-label">Trend Pulse</p>
+            <p>{{ stock.trend_note }}</p>
+        </article>
+        <article class="signal-item">
+            <p class="kpi-label">Momentum Pulse</p>
+            <p>{{ stock.momentum_note }}</p>
+        </article>
+        <article class="signal-item">
+            <p class="kpi-label">Volatility Pulse</p>
+            <p>{{ stock.volatility_note }}</p>
+        </article>
     </div>
 </section>
 
-<section class="card">
-    <h2>Analysis Explanation</h2>
-    <ul>
-        <li><strong>Trend:</strong> {{ stock.trend_note }}</li>
-        <li><strong>Momentum:</strong> {{ stock.momentum_note }}</li>
-        <li><strong>Volatility:</strong> {{ stock.volatility_note }}</li>
-    </ul>
-    <hr>
-    <ul>
-        {% for insight in stock.insights %}
-        <li>{{ insight }}</li>
-        {% endfor %}
-    </ul>
-    <p><strong>Label:</strong> Historical observation</p>
-    <p><strong>Label:</strong> Hypothetical scenario</p>
-    <p><strong>Label:</strong> Paper trade only</p>
-</section>
+<section class="stock-tabs-wrap">
+    <div class="stock-tab-nav" role="tablist" aria-label="Stock sections">
+        <button class="stock-tab-btn is-active" type="button" data-target="stockTabMarket">Market Canvas</button>
+        <button class="stock-tab-btn" type="button" data-target="stockTabInsights">Insight Feed</button>
+        <button class="stock-tab-btn" type="button" data-target="stockTabSimulation">Simulation Lab</button>
+    </div>
 
-<section class="card">
-    <h2>Paper Trade Simulation Panel</h2>
-    <p>
-        <strong>Virtual Capital:</strong> ₹{{ '%.2f'|format(stock.simulation.initial_capital) }} |
-        <strong>Final Capital:</strong> ₹{{ '%.2f'|format(stock.simulation.final_capital) }} |
-        <strong>Hypothetical Return:</strong> {{ '%.2f'|format(stock.hypothetical_return_pct) }}% |
-        <strong>Win Rate:</strong> {{ '%.1f'|format(stock.simulation.win_rate) }}%
-    </p>
-    <table>
-        <thead>
-            <tr>
-                <th>Entry Date</th>
-                <th>Entry Price</th>
-                <th>Exit Date</th>
-                <th>Exit Price</th>
-                <th>Hypothetical P/L %</th>
-                <th>Outcome</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for trade in stock.simulation.trades %}
-            <tr>
-                <td>{{ trade.entry_date }}</td>
-                <td>{{ '%.2f'|format(trade.entry_price) }}</td>
-                <td>{{ trade.exit_date }}</td>
-                <td>{{ '%.2f'|format(trade.exit_price) }}</td>
-                <td>{{ '%.2f'|format(trade.return_pct) }}%</td>
-                <td>{% if trade.profit_loss >= 0 %}<span class="long">Win</span>{% else %}<span class="short">Loss</span>{% endif %}</td>
-            </tr>
-            {% else %}
-            <tr>
-                <td colspan="6">No completed hypothetical trades for available history.</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    <p class="disclaimer">
-        Disclaimer: This panel is for historical simulation and paper trade only. Ultron does not execute real trades.
-    </p>
+    <div id="stockTabMarket" class="stock-tab-panel is-active">
+        {% if nse_quote %}
+        <section class="card nse-quote-panel">
+            <div class="section-head">
+                <h2>NSE-Style Quote Snapshot</h2>
+                <a class="btn btn-light" href="{{ nse_quote.nse_url }}" target="_blank" rel="noopener noreferrer">
+                    Open NSE Quote
+                </a>
+            </div>
+            <p class="muted">Symbol: <span class="mono">{{ nse_quote.symbol }}</span> | As of {{ nse_quote.as_of }} | {{ nse_quote.position_note }}</p>
+            <div class="summary-grid sim-kpi-grid">
+                <article class="mini-stat">
+                    <p class="kpi-label">Last Price</p>
+                    <p class="mono">₹{{ '%.2f'|format(nse_quote.last_price) }}</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Day Change</p>
+                    {% if nse_quote.day_change_pct is not none %}
+                    <p class="{{ 'long' if nse_quote.day_change_pct >= 0 else 'short' }}">{{ '%+.2f'|format(nse_quote.day_change_pct) }}%</p>
+                    {% else %}
+                    <p class="mono">N/A</p>
+                    {% endif %}
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Open / Prev Close</p>
+                    <p class="mono">₹{{ '%.2f'|format(nse_quote.open) }} / ₹{{ '%.2f'|format(nse_quote.prev_close or 0) }}</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Day Range</p>
+                    <p class="mono">₹{{ '%.2f'|format(nse_quote.day_low) }} - ₹{{ '%.2f'|format(nse_quote.day_high) }}</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Approx Day VWAP</p>
+                    <p class="mono">₹{{ '%.2f'|format(nse_quote.day_vwap_approx) }}</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Volume / 20D Avg</p>
+                    <p class="mono">{{ nse_quote.volume }} / {{ nse_quote.avg_volume_20 }}</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Turnover (Est.)</p>
+                    <p class="mono">₹{{ '%.2f'|format(nse_quote.turnover_estimate) }}</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">52W High / Low</p>
+                    <p class="mono">₹{{ '%.2f'|format(nse_quote.week_52_high) }} / ₹{{ '%.2f'|format(nse_quote.week_52_low) }}</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">From 52W Low</p>
+                    <p class="mono long">{{ '%+.2f'|format(nse_quote.distance_from_52w_low_pct) }}%</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">To 52W High</p>
+                    <p class="mono {{ 'long' if nse_quote.distance_to_52w_high_pct >= 0 else 'short' }}">{{ '%+.2f'|format(nse_quote.distance_to_52w_high_pct) }}%</p>
+                </article>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if stock_context_cards %}
+        <section class="card quick-context-panel">
+            <h2>Quick Context</h2>
+            <p class="muted">Simple proxies inspired by exchange-style quote context.</p>
+            <div class="summary-grid sim-kpi-grid">
+                <article class="mini-stat">
+                    <p class="kpi-label">Breakout Signal</p>
+                    <p class="mono">{{ stock_context_cards.breakout.label }}</p>
+                    <p class="muted">To 52W High:
+                        {% if stock_context_cards.breakout.distance_to_high_pct is not none %}
+                        <span class="{{ 'long' if stock_context_cards.breakout.distance_to_high_pct >= 0 else 'short' }}">{{ '%+.2f'|format(stock_context_cards.breakout.distance_to_high_pct) }}%</span>
+                        {% else %}N/A{% endif %}
+                    </p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Circuit Proxy Band</p>
+                    <p class="mono">±{{ '%.2f'|format(stock_context_cards.circuit_proxy.band_pct or 0) }}%</p>
+                    <p class="muted">
+                        {% if stock_context_cards.circuit_proxy.lower is not none and stock_context_cards.circuit_proxy.upper is not none %}
+                        ₹{{ '%.2f'|format(stock_context_cards.circuit_proxy.lower) }} - ₹{{ '%.2f'|format(stock_context_cards.circuit_proxy.upper) }}
+                        {% else %}
+                        N/A
+                        {% endif %}
+                    </p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Sector vs NIFTY Basket (20D)</p>
+                    <p class="mono">{{ stock_context_cards.sector_name }}</p>
+                    <p class="muted">
+                        Stock:
+                        {% if stock_context_cards.stock_20d_return_pct is not none %}{{ '%+.2f'|format(stock_context_cards.stock_20d_return_pct) }}%{% else %}N/A{% endif %}
+                        |
+                        Sector:
+                        {% if stock_context_cards.sector_20d_return_pct is not none %}{{ '%+.2f'|format(stock_context_cards.sector_20d_return_pct) }}%{% else %}N/A{% endif %}
+                        |
+                        Basket:
+                        {% if stock_context_cards.index_20d_return_pct is not none %}{{ '%+.2f'|format(stock_context_cards.index_20d_return_pct) }}%{% else %}N/A{% endif %}
+                    </p>
+                </article>
+            </div>
+        </section>
+        {% endif %}
+
+        <section class="card">
+            <h2>Interactive Chart Canvas</h2>
+            <p class="muted">Default view shows recent action. Expand to full history only when needed.</p>
+            <div class="chart-window-controls">
+                <button id="chartRecentBtn" type="button" class="btn btn-light">Show Recent (6M)</button>
+                <button id="chartFullBtn" type="button" class="btn btn-light">Show Full History</button>
+            </div>
+            <div
+                class="plotly-wrapper"
+                data-recent-start="{{ chart_window.recent_start }}"
+                data-recent-end="{{ chart_window.recent_end }}"
+                data-full-start="{{ chart_window.full_start }}"
+                data-full-end="{{ chart_window.full_end }}"
+            >
+                {{ interactive_chart_html | safe }}
+            </div>
+        </section>
+
+        <section class="split">
+            <article class="card scenario-lab" data-base-return="{{ '%.6f'|format(return_pct) }}" data-capital="{{ '%.6f'|format(stock.simulation.initial_capital) }}">
+                <h2>Scenario Lab</h2>
+                <p class="muted">Stress-test the current model return using a quick adjustment slider.</p>
+                <label class="scenario-label" for="scenarioSlider">Return Adjustment</label>
+                <input id="scenarioSlider" type="range" min="-15" max="15" value="0" step="0.25">
+                <div class="scenario-readout">
+                    <p><strong>Base Return:</strong> <span class="mono">{{ '%.2f'|format(return_pct) }}%</span></p>
+                    <p><strong>Adjustment:</strong> <span id="scenarioAdj" class="mono">+0.00%</span></p>
+                    <p><strong>Projected Return:</strong> <span id="scenarioProjected" class="mono">{{ '%.2f'|format(return_pct) }}%</span></p>
+                    <p><strong>Projected Final Capital:</strong> <span id="scenarioCapital" class="mono">₹{{ '%.2f'|format(stock.simulation.final_capital) }}</span></p>
+                </div>
+            </article>
+
+            {% if chart_price_url or chart_rsi_url %}
+            <article class="card static-gallery">
+                <h2>Static Snapshots</h2>
+                <p class="muted">Optimized images for export/report use.</p>
+                <div class="static-gallery-grid">
+                    {% if chart_price_url %}
+                    <img src="{{ chart_price_url }}" alt="{{ stock.ticker }} static price chart" class="static-chart-image">
+                    {% endif %}
+                    {% if chart_rsi_url %}
+                    <img src="{{ chart_rsi_url }}" alt="{{ stock.ticker }} static RSI chart" class="static-chart-image">
+                    {% endif %}
+                </div>
+            </article>
+            {% endif %}
+        </section>
+    </div>
+
+    <div id="stockTabInsights" class="stock-tab-panel">
+        <section class="split">
+            <article class="card">
+                <h2>Model Explanation</h2>
+                <ul class="clean-list">
+                    <li><strong>Trend:</strong> {{ stock.trend_note }}</li>
+                    <li><strong>Momentum:</strong> {{ stock.momentum_note }}</li>
+                    <li><strong>Volatility:</strong> {{ stock.volatility_note }}</li>
+                </ul>
+            </article>
+            <article class="card">
+                <h2>Insight Feed</h2>
+                <ul class="clean-list">
+                    {% for insight in stock.insights %}
+                    <li>{{ insight }}</li>
+                    {% endfor %}
+                </ul>
+                <p class="muted">Labels reflect historical observation, hypothetical scenario, and paper-trade context.</p>
+            </article>
+        </section>
+    </div>
+
+    <div id="stockTabSimulation" class="stock-tab-panel">
+        <section
+            class="card adaptive-sim-lab"
+            data-ticker="{{ stock.ticker }}"
+            data-sim-url="{{ url_for('simulation_api', ticker=stock.ticker) }}"
+            data-projection-url="{{ url_for('projection_api', ticker=stock.ticker) }}"
+        >
+            <h2>Adaptive Simulation Lab</h2>
+            <p class="muted">
+                Tune capital, risk, holding period, and costs. Ultron recalculates the full paper-trade cycle instantly.
+            </p>
+
+            <div class="sim-control-grid">
+                <label>
+                    <span>Capital (INR)</span>
+                    <input id="simCapital" type="number" min="100" step="100" value="{{ '%.2f'|format(sim_defaults.capital) }}">
+                </label>
+                <label>
+                    <span>Position Size (%)</span>
+                    <input id="simPositionSize" type="number" min="5" max="100" step="1" value="{{ '%.2f'|format(sim_defaults.position_size_pct) }}">
+                </label>
+                <label>
+                    <span>Max Holding Days</span>
+                    <input id="simMaxHoldDays" type="number" min="1" max="365" step="1" value="{{ sim_defaults.max_holding_days }}">
+                </label>
+                <label>
+                    <span>Stop Loss (%)</span>
+                    <input id="simStopLoss" type="number" min="0.5" max="40" step="0.1" value="{{ '%.2f'|format(sim_defaults.stop_loss_pct) }}">
+                </label>
+                <label>
+                    <span>Take Profit (%)</span>
+                    <input id="simTakeProfit" type="number" min="1" max="120" step="0.1" value="{{ '%.2f'|format(sim_defaults.take_profit_pct) }}">
+                </label>
+                <label>
+                    <span>Brokerage (%)</span>
+                    <input id="simBrokerage" type="number" min="0" max="2" step="0.01" value="{{ '%.4f'|format(sim_defaults.brokerage_pct) }}">
+                </label>
+                <label>
+                    <span>Slippage (%)</span>
+                    <input id="simSlippage" type="number" min="0" max="2" step="0.01" value="{{ '%.4f'|format(sim_defaults.slippage_pct) }}">
+                </label>
+                <div class="sim-actions">
+                    <button id="simRunBtn" type="button" class="btn">Run Adaptive Simulation</button>
+                </div>
+            </div>
+
+            <p id="simRunStatus" class="muted mono">Ready.</p>
+            <div id="simLiveMetrics" class="summary-grid sim-kpi-grid"></div>
+
+            <div class="table-compact-controls">
+                <p id="simTradesMeta" class="muted">No trades loaded.</p>
+                <button id="simTradesToggleBtn" type="button" class="btn btn-light" hidden>Show All Trades</button>
+            </div>
+
+            <div class="table-shell">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Entry Date</th>
+                            <th>Entry Price</th>
+                            <th>Exit Date</th>
+                            <th>Exit Price</th>
+                            <th>Return %</th>
+                            <th>P/L (INR)</th>
+                            <th>Fees</th>
+                            <th>Days Held</th>
+                            <th>Exit Reason</th>
+                            <th>Outcome</th>
+                        </tr>
+                    </thead>
+                    <tbody id="simTradesBody">
+                        <tr>
+                            <td colspan="10">Run the adaptive simulation to load trades.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="card projection-lab">
+            <h2>Ultron Forward Estimator</h2>
+            <p class="muted">
+                Enter an amount and estimate tomorrow / one-week / one-month value. Reality-check metrics are backtested on historical data.
+            </p>
+
+            <div class="projection-control-grid">
+                <label>
+                    <span>Investment Amount (INR)</span>
+                    <input id="projectionAmount" type="number" min="100" step="100" value="{{ '%.2f'|format(projection_defaults.amount) }}">
+                </label>
+                <fieldset class="projection-horizons">
+                    <legend>Horizon Set</legend>
+                    <label><input type="checkbox" class="projection-horizon" value="1" checked> Tomorrow (1 day)</label>
+                    <label><input type="checkbox" class="projection-horizon" value="5" checked> One Week (5 days)</label>
+                    <label><input type="checkbox" class="projection-horizon" value="20" checked> One Month (20 days)</label>
+                </fieldset>
+                <label>
+                    <span>Custom Horizon (days)</span>
+                    <input id="projectionCustomHorizon" type="number" min="0" max="90" step="1" value="{{ projection_defaults.custom_horizon_days }}">
+                </label>
+                <div class="sim-actions">
+                    <button id="projectionRunBtn" type="button" class="btn">Calculate Projection</button>
+                </div>
+            </div>
+
+            <p id="projectionStatus" class="muted mono">Ready.</p>
+            <p id="projectionMethod" class="muted"></p>
+            <div id="projectionCards" class="projection-card-grid"></div>
+        </section>
+
+        <section class="card">
+            <h2>Baseline Paper Trade Snapshot</h2>
+            <p class="muted">Default strategy settings for quick comparison with your adaptive run.</p>
+            <div class="summary-grid sim-kpi-grid">
+                <article class="mini-stat">
+                    <p class="kpi-label">Virtual Capital</p>
+                    <p class="mono">₹{{ '%.2f'|format(stock.simulation.initial_capital) }}</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Final Capital</p>
+                    <p class="mono">₹{{ '%.2f'|format(stock.simulation.final_capital) }}</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Hypothetical Return</p>
+                    <p class="{{ 'long' if stock.hypothetical_return_pct >= 0 else 'short' }}">{{ '%.2f'|format(stock.hypothetical_return_pct) }}%</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Win Rate</p>
+                    <p class="mono">{{ '%.1f'|format(stock.simulation.win_rate) }}%</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Max Drawdown</p>
+                    <p class="mono short">{{ '%.2f'|format(stock.simulation.max_drawdown_pct) }}%</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Profit Factor</p>
+                    <p class="mono">{{ '%.2f'|format(stock.simulation.profit_factor) }}</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Avg Trade Return</p>
+                    <p class="mono">{{ '%.2f'|format(stock.simulation.avg_trade_return_pct) }}%</p>
+                </article>
+                <article class="mini-stat">
+                    <p class="kpi-label">Total Fees</p>
+                    <p class="mono">₹{{ '%.2f'|format(stock.simulation.total_fees) }}</p>
+                </article>
+            </div>
+            <div class="table-compact-controls">
+                <p id="baselineTradesMeta" class="muted">No trades loaded.</p>
+                <button id="baselineTradesToggleBtn" type="button" class="btn btn-light" hidden>Show All Trades</button>
+            </div>
+            <div class="table-shell">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Entry Date</th>
+                            <th>Entry Price</th>
+                            <th>Exit Date</th>
+                            <th>Exit Price</th>
+                            <th>Hypothetical P/L %</th>
+                            <th>Fees</th>
+                            <th>Days Held</th>
+                            <th>Exit Reason</th>
+                            <th>Outcome</th>
+                        </tr>
+                    </thead>
+                    <tbody id="baselineTradesBody">
+                        {% for trade in stock.simulation.trades %}
+                        <tr data-baseline-trade="1">
+                            <td class="mono">{{ trade.entry_date }}</td>
+                            <td>{{ '%.2f'|format(trade.entry_price) }}</td>
+                            <td class="mono">{{ trade.exit_date }}</td>
+                            <td>{{ '%.2f'|format(trade.exit_price) }}</td>
+                            <td>{{ '%.2f'|format(trade.return_pct) }}%</td>
+                            <td>₹{{ '%.2f'|format(trade.fees_paid) }}</td>
+                            <td class="mono">{{ trade.holding_days }}</td>
+                            <td>{{ trade.exit_reason }}</td>
+                            <td>{% if trade.profit_loss >= 0 %}<span class="long">Win</span>{% else %}<span class="short">Loss</span>{% endif %}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="9">No completed hypothetical trades for available history.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <p class="disclaimer">
+                Disclaimer: This panel is for historical simulation and paper trade only. Ultron does not execute real trades.
+            </p>
+        </section>
+    </div>
 </section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if stock is not none %}
+<script>
+(function() {
+    var tabButtons = Array.from(document.querySelectorAll('.stock-tab-btn'));
+    var tabPanels = Array.from(document.querySelectorAll('.stock-tab-panel'));
+
+    tabButtons.forEach(function(button) {
+        button.addEventListener('click', function() {
+            var targetId = button.dataset.target;
+            tabButtons.forEach(function(item) {
+                item.classList.toggle('is-active', item === button);
+            });
+            tabPanels.forEach(function(panel) {
+                panel.classList.toggle('is-active', panel.id === targetId);
+            });
+        });
+    });
+
+    var plotWrap = document.querySelector('.plotly-wrapper');
+    var chartRecentBtn = document.getElementById('chartRecentBtn');
+    var chartFullBtn = document.getElementById('chartFullBtn');
+    if (plotWrap && window.Plotly) {
+        var plotEl = plotWrap.querySelector('.plotly-graph-div');
+        var recentStart = plotWrap.dataset.recentStart;
+        var recentEnd = plotWrap.dataset.recentEnd;
+        var fullStart = plotWrap.dataset.fullStart;
+        var fullEnd = plotWrap.dataset.fullEnd;
+
+        var setChartRange = function(startDate, endDate) {
+            if (!plotEl || !startDate || !endDate) {
+                return;
+            }
+            window.Plotly.relayout(plotEl, {
+                'xaxis.range': [startDate, endDate],
+                'xaxis2.range': [startDate, endDate]
+            });
+        };
+
+        if (chartRecentBtn) {
+            chartRecentBtn.addEventListener('click', function() {
+                setChartRange(recentStart, recentEnd);
+            });
+        }
+        if (chartFullBtn) {
+            chartFullBtn.addEventListener('click', function() {
+                setChartRange(fullStart, fullEnd);
+            });
+        }
+    }
+
+    var fmt = function(value, digits) {
+        return Number(value).toLocaleString(undefined, {
+            minimumFractionDigits: digits,
+            maximumFractionDigits: digits
+        });
+    };
+
+    var fmtPct = function(value) {
+        var numeric = Number(value || 0);
+        return (numeric >= 0 ? '+' : '') + fmt(numeric, 2) + '%';
+    };
+
+    var fmtInr = function(value) {
+        return '₹' + fmt(value || 0, 2);
+    };
+
+    var scenarioLab = document.querySelector('.scenario-lab');
+    if (scenarioLab) {
+        var slider = document.getElementById('scenarioSlider');
+        var adj = document.getElementById('scenarioAdj');
+        var projected = document.getElementById('scenarioProjected');
+        var capital = document.getElementById('scenarioCapital');
+
+        if (slider && adj && projected && capital) {
+            var baseReturn = Number(scenarioLab.dataset.baseReturn || 0);
+            var initialCapital = Number(scenarioLab.dataset.capital || 0);
+
+            var recalc = function() {
+                var adjustment = Number(slider.value || 0);
+                var projectedReturn = baseReturn + adjustment;
+                var projectedCapital = initialCapital * (1 + projectedReturn / 100);
+
+                adj.textContent = (adjustment >= 0 ? '+' : '') + fmt(adjustment, 2) + '%';
+                projected.textContent = fmtPct(projectedReturn);
+                capital.textContent = fmtInr(projectedCapital);
+
+                projected.classList.toggle('long', projectedReturn >= 0);
+                projected.classList.toggle('short', projectedReturn < 0);
+            };
+
+            slider.addEventListener('input', recalc);
+            recalc();
+        }
+    }
+
+    var baselineTradesBody = document.getElementById('baselineTradesBody');
+    var baselineTradesMeta = document.getElementById('baselineTradesMeta');
+    var baselineTradesToggleBtn = document.getElementById('baselineTradesToggleBtn');
+    var BASELINE_TRADE_PREVIEW_LIMIT = 12;
+    var baselineShowAllTrades = false;
+
+    var renderBaselineTrades = function() {
+        if (!baselineTradesBody) {
+            return;
+        }
+        var rows = Array.from(baselineTradesBody.querySelectorAll('tr[data-baseline-trade="1"]'));
+        var total = rows.length;
+
+        if (!total) {
+            if (baselineTradesMeta) {
+                baselineTradesMeta.textContent = 'No baseline trades available.';
+            }
+            if (baselineTradesToggleBtn) {
+                baselineTradesToggleBtn.hidden = true;
+            }
+            return;
+        }
+
+        var hiddenCount = 0;
+        if (!baselineShowAllTrades && total > BASELINE_TRADE_PREVIEW_LIMIT) {
+            hiddenCount = total - BASELINE_TRADE_PREVIEW_LIMIT;
+        }
+
+        rows.forEach(function(row, index) {
+            row.hidden = (!baselineShowAllTrades && index < hiddenCount);
+        });
+
+        if (baselineTradesMeta) {
+            if (baselineShowAllTrades || total <= BASELINE_TRADE_PREVIEW_LIMIT) {
+                baselineTradesMeta.textContent = 'Showing all ' + total + ' baseline trades.';
+            } else {
+                baselineTradesMeta.textContent = 'Showing latest ' + BASELINE_TRADE_PREVIEW_LIMIT + ' of ' + total + ' baseline trades.';
+            }
+        }
+
+        if (baselineTradesToggleBtn) {
+            baselineTradesToggleBtn.hidden = total <= BASELINE_TRADE_PREVIEW_LIMIT;
+            baselineTradesToggleBtn.textContent = baselineShowAllTrades ? 'Show Recent Only' : 'Show All Trades';
+        }
+    };
+
+    renderBaselineTrades();
+    if (baselineTradesToggleBtn) {
+        baselineTradesToggleBtn.addEventListener('click', function() {
+            baselineShowAllTrades = !baselineShowAllTrades;
+            renderBaselineTrades();
+        });
+    }
+
+    var adaptiveLab = document.querySelector('.adaptive-sim-lab');
+    if (!adaptiveLab) {
+        return;
+    }
+
+    var simUrl = adaptiveLab.dataset.simUrl;
+    var projectionUrl = adaptiveLab.dataset.projectionUrl;
+
+    var simCapital = document.getElementById('simCapital');
+    var simPositionSize = document.getElementById('simPositionSize');
+    var simMaxHoldDays = document.getElementById('simMaxHoldDays');
+    var simStopLoss = document.getElementById('simStopLoss');
+    var simTakeProfit = document.getElementById('simTakeProfit');
+    var simBrokerage = document.getElementById('simBrokerage');
+    var simSlippage = document.getElementById('simSlippage');
+    var simRunBtn = document.getElementById('simRunBtn');
+    var simRunStatus = document.getElementById('simRunStatus');
+    var simLiveMetrics = document.getElementById('simLiveMetrics');
+    var simTradesBody = document.getElementById('simTradesBody');
+    var simTradesMeta = document.getElementById('simTradesMeta');
+    var simTradesToggleBtn = document.getElementById('simTradesToggleBtn');
+
+    var TRADE_PREVIEW_LIMIT = 12;
+    var simAllTrades = [];
+    var simShowAllTrades = false;
+
+    var projectionAmount = document.getElementById('projectionAmount');
+    var projectionRunBtn = document.getElementById('projectionRunBtn');
+    var projectionStatus = document.getElementById('projectionStatus');
+    var projectionCards = document.getElementById('projectionCards');
+    var projectionMethod = document.getElementById('projectionMethod');
+    var projectionCustomHorizon = document.getElementById('projectionCustomHorizon');
+
+    var buildUrl = function(base, params) {
+        var search = new URLSearchParams(params);
+        return base + '?' + search.toString();
+    };
+
+    var fetchJson = function(url) {
+        return fetch(url, { headers: { 'Accept': 'application/json' } })
+            .then(function(response) {
+                return response.json().then(function(payload) {
+                    if (!response.ok) {
+                        throw new Error(payload.error || 'Request failed.');
+                    }
+                    return payload;
+                });
+            });
+    };
+
+    var renderSimMetrics = function(result) {
+        var cards = [
+            ['Initial Capital', fmtInr(result.initial_capital), 'mono'],
+            ['Final Capital', fmtInr(result.final_capital), 'mono'],
+            ['Total Return', fmtPct(result.total_return_pct), result.total_return_pct >= 0 ? 'long' : 'short'],
+            ['Win Rate', fmt(result.win_rate, 1) + '%', 'mono'],
+            ['Trades', String(result.trades_count), 'mono'],
+            ['Max Drawdown', fmt(result.max_drawdown_pct, 2) + '%', 'short'],
+            ['Profit Factor', fmt(result.profit_factor, 2), 'mono'],
+            ['Avg Trade Return', fmt(result.avg_trade_return_pct, 2) + '%', 'mono'],
+            ['Total Fees', fmtInr(result.total_fees), 'mono']
+        ];
+        simLiveMetrics.innerHTML = cards.map(function(item) {
+            return '<article class="mini-stat"><p class="kpi-label">' + item[0] + '</p><p class="' + item[2] + '">' + item[1] + '</p></article>';
+        }).join('');
+    };
+
+    var renderSimTrades = function(trades) {
+        simAllTrades = Array.isArray(trades) ? trades.slice() : [];
+        var totalTrades = simAllTrades.length;
+        var visibleTrades = simShowAllTrades ? simAllTrades : simAllTrades.slice(-TRADE_PREVIEW_LIMIT);
+
+        if (!totalTrades) {
+            simTradesBody.innerHTML = '<tr><td colspan="10">No completed trades for this parameter set.</td></tr>';
+            if (simTradesMeta) {
+                simTradesMeta.textContent = 'No trades found for current setup.';
+            }
+            if (simTradesToggleBtn) {
+                simTradesToggleBtn.hidden = true;
+            }
+            return;
+        }
+
+        if (simTradesMeta) {
+            if (simShowAllTrades || totalTrades <= TRADE_PREVIEW_LIMIT) {
+                simTradesMeta.textContent = 'Showing all ' + totalTrades + ' trades.';
+            } else {
+                simTradesMeta.textContent = 'Showing latest ' + visibleTrades.length + ' of ' + totalTrades + ' trades.';
+            }
+        }
+
+        if (simTradesToggleBtn) {
+            simTradesToggleBtn.hidden = totalTrades <= TRADE_PREVIEW_LIMIT;
+            simTradesToggleBtn.textContent = simShowAllTrades ? 'Show Recent Only' : 'Show All Trades';
+        }
+
+        simTradesBody.innerHTML = visibleTrades.map(function(trade) {
+            var outcomeClass = trade.outcome === 'WIN' ? 'long' : 'short';
+            return [
+                '<tr>',
+                '<td class="mono">' + trade.entry_date + '</td>',
+                '<td>' + fmt(trade.entry_price, 2) + '</td>',
+                '<td class="mono">' + trade.exit_date + '</td>',
+                '<td>' + fmt(trade.exit_price, 2) + '</td>',
+                '<td>' + fmtPct(trade.return_pct) + '</td>',
+                '<td>' + fmtInr(trade.profit_loss) + '</td>',
+                '<td>' + fmtInr(trade.fees_paid) + '</td>',
+                '<td class="mono">' + trade.holding_days + '</td>',
+                '<td>' + trade.exit_reason + '</td>',
+                '<td><span class="' + outcomeClass + '">' + trade.outcome + '</span></td>',
+                '</tr>'
+            ].join('');
+        }).join('');
+    };
+
+    var runAdaptiveSimulation = function() {
+            simRunStatus.textContent = 'Running adaptive simulation...';
+        var requestUrl = buildUrl(simUrl, {
+            capital: simCapital.value,
+            position_size_pct: simPositionSize.value,
+            max_holding_days: simMaxHoldDays.value,
+            stop_loss_pct: simStopLoss.value,
+            take_profit_pct: simTakeProfit.value,
+            brokerage_pct: simBrokerage.value,
+            slippage_pct: simSlippage.value
+        });
+
+        return fetchJson(requestUrl)
+            .then(function(payload) {
+                simShowAllTrades = false;
+                renderSimMetrics(payload.result);
+                renderSimTrades(payload.result.trades || []);
+                simRunStatus.textContent = 'Adaptive simulation updated.';
+            })
+            .catch(function(error) {
+                simRunStatus.textContent = 'Simulation failed: ' + error.message;
+                simTradesBody.innerHTML = '<tr><td colspan="10">Simulation failed. Check parameters and retry.</td></tr>';
+                if (simTradesMeta) {
+                    simTradesMeta.textContent = 'Simulation failed.';
+                }
+                if (simTradesToggleBtn) {
+                    simTradesToggleBtn.hidden = true;
+                }
+                simLiveMetrics.innerHTML = '';
+            });
+    };
+
+    var runProjection = function() {
+        projectionStatus.textContent = 'Calculating forward estimator...';
+        var selected = Array.from(document.querySelectorAll('.projection-horizon:checked'))
+            .map(function(input) { return input.value; });
+        if (!selected.length) {
+            selected = ['1', '5', '20'];
+        }
+
+        var requestUrl = buildUrl(projectionUrl, {
+            amount: projectionAmount.value,
+            horizons: selected.join(','),
+            custom_horizon_days: projectionCustomHorizon.value
+        });
+
+        return fetchJson(requestUrl)
+            .then(function(payload) {
+                projectionMethod.textContent = payload.method_note || '';
+                var cards = payload.projections || [];
+                if (!cards.length) {
+                    projectionCards.innerHTML = '<p class="muted">No projections available.</p>';
+                    projectionStatus.textContent = 'Projection returned no data.';
+                    return;
+                }
+
+                projectionCards.innerHTML = cards.map(function(item) {
+                    var gainClass = item.projected_gain >= 0 ? 'long' : 'short';
+                    var completedText = item.latest_completed_return_pct === null
+                        ? 'N/A'
+                        : (item.latest_completed_return_pct >= 0 ? '+' : '') + fmt(item.latest_completed_return_pct, 2) + '%';
+                    return [
+                        '<article class="projection-card">',
+                        '<h3>' + item.horizon_days + ' Trading Day Horizon</h3>',
+                        '<p><strong>Expected Return:</strong> <span class="' + gainClass + '">' + fmtPct(item.expected_return_pct) + '</span></p>',
+                        '<p><strong>Projected Value:</strong> ' + fmtInr(item.projected_value) + '</p>',
+                        '<p><strong>Projected Gain:</strong> <span class="' + gainClass + '">' + fmtInr(item.projected_gain) + '</span></p>',
+                        '<p><strong>Range (1-sigma):</strong> ' + fmtInr(item.range_low_value) + ' to ' + fmtInr(item.range_high_value) + '</p>',
+                        '<p><strong>Reality Check Hit Rate:</strong> ' + fmt(item.direction_hit_rate, 2) + '%</p>',
+                        '<p><strong>Avg Error:</strong> ' + fmt(item.avg_abs_error_pct, 2) + '% over ' + item.validation_samples + ' samples</p>',
+                        '<p><strong>Last Completed Horizon:</strong> ' + completedText + '</p>',
+                        '<p class="muted mono">Reference Close ' + fmt(item.reference_close, 2) + ' on ' + item.reference_date + '</p>',
+                        '</article>'
+                    ].join('');
+                }).join('');
+                projectionStatus.textContent = 'Projection updated.';
+            })
+            .catch(function(error) {
+                projectionStatus.textContent = 'Projection failed: ' + error.message;
+                projectionCards.innerHTML = '<p class="muted">Projection unavailable right now.</p>';
+            });
+    };
+
+    if (simRunBtn) {
+        simRunBtn.addEventListener('click', runAdaptiveSimulation);
+    }
+    if (simTradesToggleBtn) {
+        simTradesToggleBtn.addEventListener('click', function() {
+            simShowAllTrades = !simShowAllTrades;
+            renderSimTrades(simAllTrades);
+        });
+    }
+    if (projectionRunBtn) {
+        projectionRunBtn.addEventListener('click', runProjection);
+    }
+
+    runAdaptiveSimulation();
+    runProjection();
+})();
+</script>
 {% endif %}
 {% endblock %}

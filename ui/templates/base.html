@@ -4,24 +4,86 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Ultron Analyst UI{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block head_extra %}{% endblock %}
 </head>
 <body>
-    <header class="site-header">
-        <div class="container">
-            <h1>Ultron Local Analyst</h1>
-            <p>Read-only historical analysis and paper trading simulator</p>
-            <nav class="top-nav">
-                <a href="{{ url_for('index') }}">Dashboard</a>
+    <div class="ambient-scene" aria-hidden="true">
+        <span class="orb orb-a"></span>
+        <span class="orb orb-b"></span>
+        <span class="orb orb-c"></span>
+    </div>
+    <header class="site-header-shell">
+        <div class="site-header container">
+            <div class="brand-block">
+                <p class="eyebrow">Local Trading Intelligence</p>
+                <h1>Ultron Analyst</h1>
+                <p class="subhead">Read-only historical analysis and paper-trade simulation for NIFTY 50.</p>
+            </div>
+            <nav class="top-nav" aria-label="Primary">
+                <a href="{{ url_for('index') }}">Ultron Hub</a>
+                <span class="live-chip" aria-live="polite">
+                    <span class="live-dot" aria-hidden="true"></span>
+                    <span id="liveClock">--:--:--</span>
+                </span>
             </nav>
         </div>
     </header>
 
-    <main class="container">
+    <main class="container main-content">
         {% block content %}{% endblock %}
     </main>
 
+    <footer class="site-footer">
+        <div class="container footer-inner">
+            <p>Ultron is a local analysis system. No live trade execution.</p>
+        </div>
+    </footer>
+
+    <script>
+    (function () {
+        document.documentElement.classList.add('js-enhanced');
+
+        var clockEl = document.getElementById('liveClock');
+        if (clockEl) {
+            var renderClock = function () {
+                var now = new Date();
+                clockEl.textContent = now.toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: false
+                });
+            };
+            renderClock();
+            window.setInterval(renderClock, 1000);
+        }
+
+        var revealTargets = Array.from(document.querySelectorAll('.card, .stock-tab-btn, .projection-card, .mini-stat'));
+        revealTargets.forEach(function (node, index) {
+            node.classList.add('live-reveal');
+            node.style.setProperty('--reveal-delay', String((index % 12) * 40) + 'ms');
+        });
+
+        if ('IntersectionObserver' in window) {
+            var observer = new IntersectionObserver(function (entries) {
+                entries.forEach(function (entry) {
+                    if (!entry.isIntersecting) {
+                        return;
+                    }
+                    entry.target.classList.add('is-visible');
+                    observer.unobserve(entry.target);
+                });
+            }, { threshold: 0.08 });
+            revealTargets.forEach(function (node) { observer.observe(node); });
+        } else {
+            revealTargets.forEach(function (node) { node.classList.add('is-visible'); });
+        }
+    })();
+    </script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

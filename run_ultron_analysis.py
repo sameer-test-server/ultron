@@ -59,7 +59,13 @@ def _print_stock_result(result: StockRunResult) -> None:
     print(f"Regime: {result.regime}")
     print(f"Confidence: {_confidence_label(result.confidence)} ({result.confidence:.2f})")
     print(f"Hypothetical Return: {result.hypothetical_return_pct:.2f}%")
-    print(f"Paper Trades: {len(result.simulation.trades)} | Win Rate: {result.simulation.win_rate:.1f}%")
+    print(
+        "Paper Trades: "
+        f"{len(result.simulation.trades)} | "
+        f"Win Rate: {result.simulation.win_rate:.1f}% | "
+        f"Max DD: {result.simulation.max_drawdown_pct:.2f}% | "
+        f"PF: {result.simulation.profit_factor:.2f}"
+    )
     print(f"Chart: {result.chart_path}")
 
     print("Explanation:")

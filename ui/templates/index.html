@@ -3,39 +3,72 @@
 {% block title %}Ultron Dashboard{% endblock %}
 
 {% block content %}
-<section class="summary-grid">
-    <article class="card">
-        <h2>Total Stocks</h2>
+<section class="card dashboard-intro">
+    <div>
+        <p class="kpi-label">System Snapshot</p>
+        <h2>NIFTY 50 Market Dashboard</h2>
+        <p class="muted">Clean overview of regime, confidence, volatility and paper-trade outcomes from local data.</p>
+    </div>
+    <div class="intro-pills">
+        <span class="pill">Regime: {{ regime_filter }}</span>
+        <span class="pill">Sort: {{ sort_by.replace('_', ' ')|title }}</span>
+        <span class="pill mono">Updated: {{ last_run.strftime('%Y-%m-%d %H:%M:%S') if last_run else 'N/A' }}</span>
+    </div>
+</section>
+
+{% if processing %}
+<section id="analysisProcessingCard" class="card processing-card" data-poll-seconds="{{ analysis_poll_seconds }}">
+    <div class="processing-row">
+        <span class="spinner" aria-hidden="true"></span>
+        <div>
+            <h2>Analysis Refresh In Progress</h2>
+            <p id="analysisProcessingMessage" class="muted">{{ analysis_message }}</p>
+            {% if total_analyzed > 0 %}
+            <p class="muted">Showing last cached snapshot while background refresh completes.</p>
+            {% else %}
+            <p class="muted">Initial dataset is building. This page will refresh automatically.</p>
+            {% endif %}
+        </div>
+    </div>
+</section>
+{% endif %}
+
+<section class="summary-grid kpi-grid">
+    <article class="card kpi-card">
+        <p class="kpi-label">Total Stocks</p>
         <p class="metric">{{ total_analyzed }}</p>
     </article>
-    <article class="card">
-        <h2>LONG_TERM</h2>
+    <article class="card kpi-card">
+        <p class="kpi-label">LONG_TERM</p>
         <p class="metric long">{{ long_term_count }}</p>
     </article>
-    <article class="card">
-        <h2>SHORT_TERM</h2>
+    <article class="card kpi-card">
+        <p class="kpi-label">SHORT_TERM</p>
         <p class="metric short">{{ short_term_count }}</p>
     </article>
-    <article class="card">
-        <h2>Best Hypothetical Return</h2>
+    <article class="card kpi-card">
+        <p class="kpi-label">Best Hypothetical Return</p>
         <p class="metric long">{{ '%.2f'|format(best_return) }}%</p>
     </article>
-    <article class="card">
-        <h2>Worst Hypothetical Return</h2>
+    <article class="card kpi-card">
+        <p class="kpi-label">Worst Hypothetical Return</p>
         <p class="metric short">{{ '%.2f'|format(worst_return) }}%</p>
     </article>
-    <article class="card">
-        <h2>Last Run</h2>
-        <p class="metric small">{{ last_run.strftime('%Y-%m-%d %H:%M:%S') if last_run else 'Not available' }}</p>
+    <article class="card kpi-card">
+        <p class="kpi-label">Last Run</p>
+        <p class="metric small mono">{{ last_run.strftime('%Y-%m-%d %H:%M:%S') if last_run else 'Not available' }}</p>
     </article>
 </section>
 
 <section class="card">
-    <h2>Interactive Filters</h2>
-    <form method="get" action="{{ url_for('index') }}" class="filter-form">
+    <div class="section-head">
+        <h2>Interactive Filters</h2>
+        <p class="muted"><strong id="visibleCount">{{ displayed_count }}</strong> stocks visible.</p>
+    </div>
+    <form id="dashboardFilterForm" method="get" action="{{ url_for('index') }}" class="filter-form">
         <label>
             Regime
-            <select name="regime">
+            <select id="regimeSelect" name="regime">
                 <option value="ALL" {% if regime_filter == 'ALL' %}selected{% endif %}>All</option>
                 <option value="LONG_TERM" {% if regime_filter == 'LONG_TERM' %}selected{% endif %}>LONG_TERM</option>
                 <option value="SHORT_TERM" {% if regime_filter == 'SHORT_TERM' %}selected{% endif %}>SHORT_TERM</option>
@@ -44,71 +77,177 @@
 
         <label>
             Sort By
-            <select name="sort">
+            <select id="sortSelect" name="sort">
                 <option value="highest_return" {% if sort_by == 'highest_return' %}selected{% endif %}>Highest hypothetical return</option>
                 <option value="lowest_risk" {% if sort_by == 'lowest_risk' %}selected{% endif %}>Lowest risk</option>
                 <option value="highest_confidence" {% if sort_by == 'highest_confidence' %}selected{% endif %}>Highest confidence</option>
             </select>
         </label>
 
-        <button type="submit">Apply</button>
+        <label>
+            Search Ticker
+            <input id="tickerSearch" type="search" placeholder="e.g. RELIANCE" aria-label="Search ticker">
+        </label>
+
+        <div class="filter-actions">
+            <button type="submit">Apply Instantly</button>
+            <a class="link-btn" href="{{ url_for('index') }}">Reset</a>
+        </div>
     </form>
-    <p class="muted">Showing {{ displayed_count }} stocks after filter/sort.</p>
+</section>
+
+<section class="card market-pulse">
+    <div class="section-head">
+        <h2>Market Pulse</h2>
+        <span id="marketDirectionBadge" class="pulse-badge pulse-flat">Flat</span>
+    </div>
+    <p id="marketBreadthText" class="muted">Waiting for tracker data...</p>
+    <div id="marketPulseBars" class="pulse-bars">
+        <p class="muted">Pulse graph will appear after first refresh.</p>
+    </div>
+</section>
+
+<section class="card breakout-watch">
+    <div class="section-head">
+        <h2>52W Breakout Watch</h2>
+        <p class="muted">Compact alerts based on local historical range.</p>
+    </div>
+    <div class="table-shell">
+        <table>
+            <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Status</th>
+                    <th class="numeric">To 52W High</th>
+                    <th class="numeric">From 52W Low</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in breakout_watchlist %}
+                <tr>
+                    <td><span class="ticker">{{ item.ticker }}</span></td>
+                    <td>{{ item.label }}</td>
+                    <td class="numeric {{ 'long' if (item.distance_to_high_pct or 0) >= 0 else 'short' }}">
+                        {% if item.distance_to_high_pct is not none %}{{ '%+.2f'|format(item.distance_to_high_pct) }}%{% else %}N/A{% endif %}
+                    </td>
+                    <td class="numeric long">
+                        {% if item.distance_from_low_pct is not none %}{{ '%+.2f'|format(item.distance_from_low_pct) }}%{% else %}N/A{% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4">No breakout candidates right now.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section
+    class="card live-tracker"
+    data-tickers="{{ live_tracker_tickers|join(',') }}"
+    data-refresh-seconds="{{ live_refresh_seconds }}"
+>
+    <div class="section-head">
+        <h2>Real-Time Tracker</h2>
+        <p id="liveTrackerStatus" class="muted">Waiting for first refresh...</p>
+    </div>
+    <div class="table-shell dashboard-table">
+        <table>
+            <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th class="numeric">Last Price</th>
+                    <th class="numeric">Change %</th>
+                    <th class="numeric">Day High</th>
+                    <th class="numeric">Day Low</th>
+                    <th class="numeric">Day Volume</th>
+                    <th class="numeric">Updated</th>
+                    <th class="numeric">Mode</th>
+                </tr>
+            </thead>
+            <tbody id="liveQuotesBody">
+                <tr>
+                    <td colspan="8">Loading tracker...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
 </section>
 
 <section class="card">
-    <h2>Stock Overview</h2>
-    <table>
-        <thead>
-            <tr>
-                <th>Ticker</th>
-                <th>Regime</th>
-                <th>Confidence</th>
-                <th>Volatility</th>
-                <th>Hypothetical Return</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for stock in stocks %}
-            <tr class="click-row" data-href="{{ url_for('stock_detail', ticker=stock.ticker) }}">
-                <td>{{ stock.ticker }}</td>
-                <td>
-                    <span class="regime {{ 'long' if stock.regime == 'LONG_TERM' else 'short' }}">
-                        {{ stock.regime }}
-                    </span>
-                </td>
-                <td>{{ stock.confidence_label }} ({{ '%.2f'|format(stock.confidence) }})</td>
-                <td>{{ stock.volatility_label }} ({{ '%.1f'|format(stock.volatility_value * 100) }}%)</td>
-                <td>{{ '%.2f'|format(stock.hypothetical_return_pct) }}%</td>
-            </tr>
-            {% else %}
-            <tr>
-                <td colspan="5">No stocks match the selected filters.</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="section-head">
+        <h2>Stock Overview</h2>
+    </div>
+    <div class="table-shell dashboard-table">
+        <table id="overviewTable">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Ticker</th>
+                    <th>Regime</th>
+                    <th class="numeric">Confidence</th>
+                    <th class="numeric">Volatility</th>
+                    <th class="numeric">Hypothetical Return</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for stock in stocks %}
+                <tr
+                    class="click-row"
+                    data-href="{{ url_for('stock_detail', ticker=stock.ticker) }}"
+                    data-ticker="{{ stock.ticker }}"
+                    data-regime="{{ stock.regime }}"
+                    data-confidence="{{ '%.8f'|format(stock.confidence) }}"
+                    data-volatility="{{ '%.8f'|format(stock.volatility_value) }}"
+                    data-return="{{ '%.8f'|format(stock.hypothetical_return_pct) }}"
+                >
+                    <td class="mono muted">{{ loop.index }}</td>
+                    <td><span class="ticker">{{ stock.ticker }}</span></td>
+                    <td>
+                        <span class="regime {{ 'long' if stock.regime == 'LONG_TERM' else 'short' }}">
+                            {{ stock.regime }}
+                        </span>
+                    </td>
+                    <td class="numeric">{{ stock.confidence_label }} <span class="muted">({{ '%.2f'|format(stock.confidence) }})</span></td>
+                    <td class="numeric">{{ stock.volatility_label }} <span class="muted">({{ '%.1f'|format(stock.volatility_value * 100) }}%)</span></td>
+                    <td class="numeric {{ 'long' if stock.hypothetical_return_pct >= 0 else 'short' }}">{{ '%.2f'|format(stock.hypothetical_return_pct) }}%</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6">{{ 'Analysis is processing. Please wait...' if processing else 'No stocks match the selected filters.' }}</td>
+                </tr>
+                {% endfor %}
+                <tr id="noSearchRows" style="display: none;">
+                    <td colspan="6">No stocks match your search.</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
 </section>
 
 {% if errors %}
 <section class="card warning">
     <h2>Skipped Stocks (Missing/Invalid Data)</h2>
-    <table>
-        <thead>
-            <tr>
-                <th>Ticker</th>
-                <th>Reason</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for ticker, reason in errors.items() %}
-            <tr>
-                <td>{{ ticker }}</td>
-                <td>{{ reason }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="table-shell">
+        <table>
+            <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Reason</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ticker, reason in errors.items() %}
+                <tr>
+                    <td><span class="ticker">{{ ticker }}</span></td>
+                    <td>{{ reason }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </section>
 {% endif %}
 {% endblock %}
@@ -120,5 +259,325 @@ document.querySelectorAll('.click-row').forEach(function(row) {
         window.location = row.dataset.href;
     });
 });
+
+var searchInput = document.getElementById('tickerSearch');
+var rows = Array.from(document.querySelectorAll('#overviewTable tbody tr.click-row'));
+var tableBody = document.querySelector('#overviewTable tbody');
+var visibleCount = document.getElementById('visibleCount');
+var noSearchRows = document.getElementById('noSearchRows');
+var regimeSelect = document.getElementById('regimeSelect');
+var sortSelect = document.getElementById('sortSelect');
+var filterForm = document.getElementById('dashboardFilterForm');
+var liveTrackerSection = document.querySelector('.live-tracker');
+var liveQuotesBody = document.getElementById('liveQuotesBody');
+var liveTrackerStatus = document.getElementById('liveTrackerStatus');
+var marketDirectionBadge = document.getElementById('marketDirectionBadge');
+var marketBreadthText = document.getElementById('marketBreadthText');
+var marketPulseBars = document.getElementById('marketPulseBars');
+var processingCard = document.getElementById('analysisProcessingCard');
+var processingMessage = document.getElementById('analysisProcessingMessage');
+var previousQuotePriceMap = new Map();
+
+function toNumber(value) {
+    var parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sortRowsBySelection() {
+    if (!sortSelect || !tableBody || !rows.length) {
+        return;
+    }
+
+    var sortBy = sortSelect.value || 'highest_return';
+    rows.sort(function(a, b) {
+        if (sortBy === 'lowest_risk') {
+            return toNumber(a.dataset.volatility) - toNumber(b.dataset.volatility);
+        }
+        if (sortBy === 'highest_confidence') {
+            return toNumber(b.dataset.confidence) - toNumber(a.dataset.confidence);
+        }
+        return toNumber(b.dataset.return) - toNumber(a.dataset.return);
+    });
+
+    rows.forEach(function(row) {
+        tableBody.insertBefore(row, noSearchRows || null);
+    });
+}
+
+function applyClientFilters() {
+    if (!rows.length) {
+        return;
+    }
+
+    sortRowsBySelection();
+
+    var query = searchInput ? searchInput.value.trim().toUpperCase() : '';
+    var regime = regimeSelect ? regimeSelect.value : 'ALL';
+    var count = 0;
+
+    rows.forEach(function(row) {
+        var ticker = (row.dataset.ticker || '').toUpperCase();
+        var rowRegime = (row.dataset.regime || '').toUpperCase();
+        var matchTicker = ticker.indexOf(query) !== -1;
+        var matchRegime = regime === 'ALL' || rowRegime === regime;
+        var show = matchTicker && matchRegime;
+        row.style.display = show ? '' : 'none';
+        if (show) {
+            count += 1;
+        }
+    });
+
+    if (visibleCount) {
+        visibleCount.textContent = String(count);
+    }
+
+    if (noSearchRows) {
+        noSearchRows.style.display = count === 0 ? '' : 'none';
+    }
+}
+
+if (filterForm) {
+    filterForm.addEventListener('submit', function(event) {
+        event.preventDefault();
+        applyClientFilters();
+    });
+}
+
+if (searchInput) {
+    searchInput.addEventListener('input', applyClientFilters);
+}
+if (regimeSelect) {
+    regimeSelect.addEventListener('change', applyClientFilters);
+}
+if (sortSelect) {
+    sortSelect.addEventListener('change', applyClientFilters);
+}
+if (rows.length) {
+    applyClientFilters();
+}
+
+function formatNumber(value, fractionDigits) {
+    if (value === null || value === undefined || Number.isNaN(value)) {
+        return '-';
+    }
+    return Number(value).toLocaleString(undefined, {
+        minimumFractionDigits: fractionDigits,
+        maximumFractionDigits: fractionDigits
+    });
+}
+
+function formatVolume(value) {
+    if (value === null || value === undefined || Number.isNaN(value)) {
+        return '-';
+    }
+    return Number(value).toLocaleString();
+}
+
+function renderLiveQuotes(data) {
+    if (!liveQuotesBody) {
+        return;
+    }
+
+    var quotes = Array.isArray(data.quotes) ? data.quotes : [];
+    if (!quotes.length) {
+        liveQuotesBody.innerHTML = '<tr><td colspan="8">No live quotes available right now.</td></tr>';
+        renderMarketPulse([], null);
+        return;
+    }
+
+    liveQuotesBody.innerHTML = quotes.map(function(item) {
+        var change = item.change_pct;
+        var changeClass = '';
+        var rowFlashClass = '';
+        if (change !== null && change !== undefined) {
+            changeClass = change >= 0 ? 'change-up' : 'change-down';
+        }
+        var modeClass = 'mode-delayed';
+        if (item.mode === 'LIVE') {
+            modeClass = 'mode-live';
+        } else if (item.mode === 'LOCAL') {
+            modeClass = 'mode-local';
+        }
+        var changeText = (change === null || change === undefined) ? '-' : (change >= 0 ? '+' : '') + formatNumber(change, 2) + '%';
+        var lastPrice = Number(item.last_price);
+        var previousPrice = previousQuotePriceMap.get(item.ticker);
+        if (Number.isFinite(lastPrice) && Number.isFinite(previousPrice)) {
+            if (lastPrice > previousPrice) {
+                rowFlashClass = 'flash-up';
+            } else if (lastPrice < previousPrice) {
+                rowFlashClass = 'flash-down';
+            }
+        }
+        if (Number.isFinite(lastPrice)) {
+            previousQuotePriceMap.set(item.ticker, lastPrice);
+        }
+
+        return '' +
+            '<tr class="' + rowFlashClass + '">' +
+                '<td><span class="ticker">' + item.ticker + '</span></td>' +
+                '<td class="numeric mono">' + formatNumber(item.last_price, 2) + '</td>' +
+                '<td class="numeric mono ' + changeClass + '">' + changeText + '</td>' +
+                '<td class="numeric">' + formatNumber(item.day_high, 2) + '</td>' +
+                '<td class="numeric">' + formatNumber(item.day_low, 2) + '</td>' +
+                '<td class="numeric">' + formatVolume(item.day_volume) + '</td>' +
+                '<td class="numeric mono">' + (item.as_of || '-') + '</td>' +
+                '<td class="numeric"><span class="mode-chip ' + modeClass + '">' + (item.mode || 'N/A') + '</span></td>' +
+            '</tr>';
+    }).join('');
+}
+
+function renderMarketPulse(quotes, updatedAt) {
+    if (!marketDirectionBadge || !marketBreadthText || !marketPulseBars) {
+        return;
+    }
+
+    if (!quotes || !quotes.length) {
+        marketDirectionBadge.className = 'pulse-badge pulse-flat';
+        marketDirectionBadge.textContent = 'No Data';
+        marketBreadthText.textContent = 'Unable to build market pulse right now.';
+        marketPulseBars.innerHTML = '<p class="muted">No quote changes available for pulse graph.</p>';
+        return;
+    }
+
+    var validChanges = quotes.filter(function(item) {
+        return item.change_pct !== null && item.change_pct !== undefined && Number.isFinite(Number(item.change_pct));
+    }).map(function(item) {
+        return {
+            ticker: item.ticker,
+            change: Number(item.change_pct)
+        };
+    });
+
+    if (!validChanges.length) {
+        marketDirectionBadge.className = 'pulse-badge pulse-flat';
+        marketDirectionBadge.textContent = 'Flat';
+        marketBreadthText.textContent = 'No valid percentage changes in current snapshot.';
+        marketPulseBars.innerHTML = '<p class="muted">No valid pulse bars to display.</p>';
+        return;
+    }
+
+    var up = validChanges.filter(function(item) { return item.change > 0.05; }).length;
+    var down = validChanges.filter(function(item) { return item.change < -0.05; }).length;
+    var flat = validChanges.length - up - down;
+    var avg = validChanges.reduce(function(sum, item) { return sum + item.change; }, 0) / validChanges.length;
+    var maxAbs = Math.max.apply(null, validChanges.map(function(item) { return Math.abs(item.change); }).concat([0.5]));
+
+    var directionClass = 'pulse-flat';
+    var directionText = 'Flat';
+    if (avg > 0.05 || up > down) {
+        directionClass = 'pulse-up';
+        directionText = 'Market Up';
+    } else if (avg < -0.05 || down > up) {
+        directionClass = 'pulse-down';
+        directionText = 'Market Down';
+    }
+
+    marketDirectionBadge.className = 'pulse-badge ' + directionClass;
+    marketDirectionBadge.textContent = directionText;
+    marketBreadthText.textContent =
+        'Advancers: ' + up +
+        ' | Decliners: ' + down +
+        ' | Flat: ' + flat +
+        ' | Avg Change: ' + (avg >= 0 ? '+' : '') + avg.toFixed(2) + '%' +
+        (updatedAt ? ' | Updated: ' + updatedAt : '');
+
+    marketPulseBars.innerHTML = validChanges.map(function(item, index) {
+        var height = Math.max(8, Math.round((Math.abs(item.change) / maxAbs) * 58));
+        var barClass = item.change >= 0 ? 'pulse-bar up' : 'pulse-bar down';
+        return '' +
+            '<div class="pulse-col" title="' + item.ticker + ': ' + (item.change >= 0 ? '+' : '') + item.change.toFixed(2) + '%">' +
+                '<div class="' + barClass + '" style="height:' + height + 'px;animation-delay:' + (index * 0.04).toFixed(2) + 's;"></div>' +
+                '<span class="pulse-label">' + item.ticker.replace('.NS', '') + '</span>' +
+            '</div>';
+    }).join('');
+}
+
+async function refreshLiveTracker() {
+    if (!liveTrackerSection || !liveQuotesBody) {
+        return;
+    }
+
+    var tickers = (liveTrackerSection.dataset.tickers || '').trim();
+    if (!tickers) {
+        liveQuotesBody.innerHTML = '<tr><td colspan="8">No tickers selected for tracking.</td></tr>';
+        return;
+    }
+
+    if (liveTrackerStatus) {
+        liveTrackerStatus.textContent = 'Refreshing live quotes...';
+    }
+
+    try {
+        var response = await fetch('/api/live-quotes?tickers=' + encodeURIComponent(tickers), {
+            cache: 'no-store'
+        });
+        if (!response.ok) {
+            throw new Error('HTTP ' + response.status);
+        }
+        var data = await response.json();
+        renderLiveQuotes(data);
+        renderMarketPulse(data.quotes || [], data.updated_at || null);
+        if (liveTrackerStatus) {
+            var modes = {};
+            (data.quotes || []).forEach(function(item) {
+                var key = item.mode || 'N/A';
+                modes[key] = (modes[key] || 0) + 1;
+            });
+            var modeText = Object.keys(modes).map(function(key) { return key + ': ' + modes[key]; }).join(', ');
+            var liveCount = modes.LIVE || 0;
+            var delayedCount = modes.DELAYED || 0;
+            var localCount = modes.LOCAL || 0;
+            var statusNote = '';
+            if (liveCount === 0 && delayedCount === 0 && localCount > 0) {
+                statusNote = ' | Live feed unavailable, showing local snapshot';
+            }
+            liveTrackerStatus.textContent = 'Tracker updated at ' + (data.updated_at || 'N/A') + (modeText ? ' | ' + modeText : '') + statusNote;
+        }
+    } catch (error) {
+        if (liveTrackerStatus) {
+            liveTrackerStatus.textContent = 'Live tracker refresh failed. Retrying...';
+        }
+    }
+}
+
+if (liveTrackerSection) {
+    var refreshSeconds = Number(liveTrackerSection.dataset.refreshSeconds || 20);
+    if (!Number.isFinite(refreshSeconds) || refreshSeconds < 10) {
+        refreshSeconds = 20;
+    }
+
+    refreshLiveTracker();
+    window.setInterval(refreshLiveTracker, refreshSeconds * 1000);
+}
+
+async function pollAnalysisStatus() {
+    if (!processingCard) {
+        return;
+    }
+
+    try {
+        var response = await fetch('/api/analysis-status', { cache: 'no-store' });
+        if (!response.ok) {
+            return;
+        }
+        var data = await response.json();
+        if (processingMessage && data.message) {
+            processingMessage.textContent = data.message;
+        }
+        if (data.status === 'ready' || data.status === 'error') {
+            window.location.reload();
+        }
+    } catch (error) {
+        // Keep current banner text; next poll will retry.
+    }
+}
+
+if (processingCard) {
+    var pollSeconds = Number(processingCard.dataset.pollSeconds || 4);
+    if (!Number.isFinite(pollSeconds) || pollSeconds < 2) {
+        pollSeconds = 4;
+    }
+    window.setInterval(pollAnalysisStatus, pollSeconds * 1000);
+}
 </script>
 {% endblock %}

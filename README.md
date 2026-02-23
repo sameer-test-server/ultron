@@ -60,6 +60,15 @@ python ui/app.py
 # Open your browser to http://127.0.0.1:5000
 ```
 
+### UI Runtime Notes
+
+- UI logs are written to `logs/ui.log`.
+- If serving with Gunicorn, use a single worker so only one background scheduler thread runs:
+
+```bash
+gunicorn -w 1 --threads 8 ui.app:app
+```
+
 ---
 
 ## ⚙️ Automated Daily Execution
