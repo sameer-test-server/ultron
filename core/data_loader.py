@@ -9,7 +9,6 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import smtplib
-import os
 from email.message import EmailMessage
 
 import pandas as pd
@@ -20,6 +19,7 @@ from config.settings import HISTORY_YEARS, RAW_DATA_DIR
 
 REQUIRED_COLUMNS = ["Date", "Open", "High", "Low", "Close", "Volume"]
 NSE_VOLUME_COLUMNS = ("TOTTRDQTY", "TOTTRD_QTY", "TTL_TRD_QNTY", "TOT_QTY")
+BACKFILL_TOLERANCE_DAYS = 14
 
 LOGGER = logging.getLogger("ultron.data_loader")
 _NSE_BHAVCOPY_CACHE = {}
@@ -363,12 +363,12 @@ def _download_from_alpha_vantage(ticker, start_date, end_date):
 
 def _download_with_fallback(ticker, start_date, end_date, allow_empty):
     """Attempt Yahoo first, then NSE Bhavcopy, then Stooq."""
+    days_requested = (end_date - start_date).days
     try:
         yahoo_df = _download_from_yahoo(ticker, start_date, end_date)
         if not yahoo_df.empty:
             return yahoo_df, "yahoo"
 
-        days_requested = (end_date - start_date).days
         should_fallback = (not allow_empty) or _yahoo_dns_unavailable() or days_requested >= 3
         if not should_fallback:
             return yahoo_df, "empty"
@@ -379,14 +379,9 @@ def _download_with_fallback(ticker, start_date, end_date, allow_empty):
             _emit(f"Yahoo failed for {ticker}, attempting fallback")
         else:
             _emit(f"Yahoo failed for {ticker}, attempting fallback")
-    # If requested history is very large, limit per-source fallback window to recent 365 days
-    fallback_start = start_date
-    if days_requested > 365:
-        fallback_start = max(start_date, end_date - datetime.timedelta(days=365))
-        _emit(f"Fallback window limited to last 365 days for {ticker}")
 
-    # Try NSE Bhavcopy using a limited window to avoid long per-day loops for multi-year rebuilds
-    nse_df = _download_from_nse_bhavcopy(ticker, fallback_start, end_date)
+    # Respect requested range so first bootstrap can build full HISTORY_YEARS.
+    nse_df = _download_from_nse_bhavcopy(ticker, start_date, end_date)
     if not nse_df.empty:
         _emit(f"Recovered via NSE for {ticker}")
         return nse_df, "nse"
@@ -396,7 +391,7 @@ def _download_with_fallback(ticker, start_date, end_date, allow_empty):
         _emit(f"Recovered via Stooq for {ticker}")
         return stooq_df, "stooq"
     # Try AlphaVantage if API key is set (optional premium fallback)
-    av_df = _download_from_alpha_vantage(ticker, fallback_start, end_date)
+    av_df = _download_from_alpha_vantage(ticker, start_date, end_date)
     if not av_df.empty:
         _emit(f"Recovered via AlphaVantage for {ticker}")
         return av_df, "alphavantage"
@@ -447,6 +442,29 @@ def _update_single_ticker(ticker):
     last_date = existing["Date"].dropna().max()
     if pd.isna(last_date):
         return _rebuild_ticker_file(ticker, csv_path)
+
+    # If a file exists but history is shorter than configured, bootstrap full history once.
+    first_date = existing["Date"].dropna().min()
+    target_start = _full_history_start_date()
+    if pd.isna(first_date):
+        return _rebuild_ticker_file(ticker, csv_path)
+
+    if first_date.date() > (target_start + datetime.timedelta(days=BACKFILL_TOLERANCE_DAYS)):
+        _emit(f"Backfilling full history for {ticker}")
+        full_history, source = _download_with_fallback(
+            ticker=ticker,
+            start_date=target_start,
+            end_date=today + datetime.timedelta(days=1),
+            allow_empty=False,
+        )
+        if _clean_and_save(full_history, csv_path):
+            existing = pd.read_csv(csv_path, parse_dates=["Date"])
+            existing["Date"] = pd.to_datetime(existing["Date"], errors="coerce")
+            last_date = existing["Date"].dropna().max()
+            if pd.isna(last_date):
+                return "failed"
+        else:
+            return "failed" if source == "failed" else "updated"
 
     next_date = last_date.date() + datetime.timedelta(days=1)
     if next_date > today:

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import os
 from pathlib import Path
+import sys
 from typing import Any
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
@@ -20,6 +21,12 @@ import plotly.graph_objects as go
 from flask import Flask, abort, render_template, request, send_file
 from plotly.offline import get_plotlyjs, plot
 from plotly.subplots import make_subplots
+
+# Make `python ui/app.py` work without external PYTHONPATH setup.
+THIS_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = THIS_DIR.parent
+if str(PROJECT_DIR) not in sys.path:
+    sys.path.insert(0, str(PROJECT_DIR))
 
 from config.nifty50 import NIFTY50_TICKERS
 from config.settings import BASE_DIR
@@ -73,7 +80,25 @@ def create_app() -> Flask:
         "last_run": None,
         "stocks": {},
         "errors": {},
+        "data_signature": None,
     }
+
+    def _compute_data_signature() -> tuple[int, int, int]:
+        """
+        Compute a lightweight signature of `data/raw` contents.
+        Any CSV add/update/removal changes this signature.
+        """
+        raw_dir = BASE_PATH / "data" / "raw"
+        if not raw_dir.exists():
+            return (0, 0, 0)
+
+        csv_files = sorted(raw_dir.glob("*.csv"))
+        if not csv_files:
+            return (0, 0, 0)
+
+        latest_mtime = max(path.stat().st_mtime_ns for path in csv_files)
+        total_size = sum(path.stat().st_size for path in csv_files)
+        return (len(csv_files), total_size, latest_mtime)
 
     def _safe_float(value: Any, default: float = 0.0) -> float:
         """Convert optional numeric values to finite float safely."""
@@ -337,10 +362,15 @@ def create_app() -> Flask:
         state["stocks"] = stocks
         state["errors"] = errors
         state["last_run"] = datetime.now()
+        state["data_signature"] = _compute_data_signature()
 
     def _ensure_state() -> None:
         """Ensure the in-memory cache is populated for current process."""
-        if not state["stocks"] and not state["errors"]:
+        current_signature = _compute_data_signature()
+        if (
+            not state["stocks"]
+            and not state["errors"]
+        ) or state["data_signature"] != current_signature:
             _run_analysis()
 
     @app.route("/")

@@ -1,2 +1,2 @@
-# Example cron entry (run daily at 06:30). Adjust path as needed.
-30 6 * * * /home/madara/ultron/scripts/cron_runner.sh
+# Daily run at 06:30 AM (local time)
+30 6 * * * /Users/sameer/ultron/scripts/cron_runner.sh >> /Users/sameer/ultron/logs/cron.log 2>&1

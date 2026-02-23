@@ -1,5 +1,7 @@
 .venv/
 logs/*.log
+logs/*.lock
 __pycache__/
 *.pyc
-data/raw/*.csv
+data/logs/
+ui/static/charts/
