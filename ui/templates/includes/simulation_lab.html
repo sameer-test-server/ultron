@@ -1,0 +1,41 @@
+{% set sim_defaults = sim_defaults if sim_defaults is defined else {'capital': 2000.0, 'position_size_pct': 100.0, 'brokerage_pct': 0.08, 'slippage_pct': 0.05, 'max_holding_days': 60, 'stop_loss_pct': 8.0, 'take_profit_pct': 18.0} %}
+<div class="adaptive-sim-lab" data-ticker="{{ stock.ticker }}" data-sim-url="{{ url_for('simulation_api', ticker=stock.ticker) }}">
+    <p class="text-body-secondary mb-4">
+        Tune capital, risk, holding period, and costs. Ultron recalculates the full paper-trade cycle instantly, allowing you to test the model's robustness under different conditions.
+    </p>
+    <div class="row g-3">
+        <div class="col-md-3"><label for="simCapital" class="form-label form-label-sm">Capital (INR)</label><input id="simCapital" type="number" class="form-control form-control-sm" min="100" step="100" value="{{ '%.2f'|format(sim_defaults.capital) }}"></div>
+        <div class="col-md-3"><label for="simPositionSize" class="form-label form-label-sm">Position Size (%)</label><input id="simPositionSize" type="number" class="form-control form-control-sm" min="5" max="100" step="1" value="{{ '%.2f'|format(sim_defaults.position_size_pct) }}"></div>
+        <div class="col-md-3"><label for="simMaxHoldDays" class="form-label form-label-sm">Max Holding Days</label><input id="simMaxHoldDays" type="number" class="form-control form-control-sm" min="1" max="365" step="1" value="{{ sim_defaults.max_holding_days }}"></div>
+        <div class="col-md-3"><label for="simStopLoss" class="form-label form-label-sm">Stop Loss (%)</label><input id="simStopLoss" type="number" class="form-control form-control-sm" min="0.5" max="40" step="0.1" value="{{ '%.2f'|format(sim_defaults.stop_loss_pct) }}"></div>
+        <div class="col-md-3"><label for="simTakeProfit" class="form-label form-label-sm">Take Profit (%)</label><input id="simTakeProfit" type="number" class="form-control form-control-sm" min="1" max="120" step="0.1" value="{{ '%.2f'|format(sim_defaults.take_profit_pct) }}"></div>
+        <div class="col-md-3"><label for="simBrokerage" class="form-label form-label-sm">Brokerage (%)</label><input id="simBrokerage" type="number" class="form-control form-control-sm" min="0" max="2" step="0.01" value="{{ '%.4f'|format(sim_defaults.brokerage_pct) }}"></div>
+        <div class="col-md-3"><label for="simSlippage" class="form-label form-label-sm">Slippage (%)</label><input id="simSlippage" type="number" class="form-control form-control-sm" min="0" max="2" step="0.01" value="{{ '%.4f'|format(sim_defaults.slippage_pct) }}"></div>
+        <div class="col-md-3 d-grid"><button id="simRunBtn" type="button" class="btn btn-primary btn-sm mt-3">Run Simulation</button></div>
+    </div>
+
+    <div id="simLiveMetrics" class="row g-3 mt-3"></div>
+    <p id="simRunStatus" class="text-body-secondary small font-monospace mt-3">Ready.</p>
+
+    <div class="d-flex justify-content-between align-items-center mt-3">
+        <p id="simTradesMeta" class="text-body-secondary small mb-0">No trades loaded.</p>
+        <button id="simTradesToggleBtn" type="button" class="btn btn-sm btn-outline-secondary" hidden>Show All Trades</button>
+    </div>
+    <div class="table-responsive mt-2">
+        <table class="table table-sm table-hover">
+            <thead>
+                <tr>
+                    <th>Entry</th>
+                    <th>Exit</th>
+                    <th class="text-end">Return %</th>
+                    <th class="text-end">P/L</th>
+                    <th class="text-end">Days</th>
+                    <th>Reason</th>
+                </tr>
+            </thead>
+            <tbody id="simTradesBody">
+                <tr><td colspan="6" class="text-center text-body-secondary py-4">Run simulation to load trades.</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>

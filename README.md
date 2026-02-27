@@ -130,6 +130,13 @@ ultron/
 
 ---
 
+## ✨ Recent Updates (February 2026)
+
+*   **⚡️ Performance Boost (Feather Integration):** The data loading and analysis pipelines have been significantly accelerated by replacing CSV parsing with the high-speed Feather binary format. This results in a much faster and more responsive UI experience.
+*   **🧠 Smarter Ultron Calculator:** The investment calculator has been reworked to produce more conservative and reliable predictions. It now incorporates a "pessimism factor" based on historical errors to temper overly optimistic forecasts and a more stringent decision-making model to better align with a loss-avoidance strategy.
+
+---
+
 ## 🛠️ Technology Stack
 
 *   **Core:** Python 3.11+
@@ -154,4 +161,4 @@ Your first stop for diagnosing issues.
 
 ---
 
-**Last Updated**: 2026-02-22 | **Status**: ✅ **PRODUCTION READY**
+**Last Updated**: 2026-02-27 | **Status**: ✅ **PRODUCTION READY**

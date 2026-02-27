@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Callable
 
@@ -14,54 +15,79 @@ from plotly.subplots import make_subplots
 from core.analyst import StockAnalysis
 from core.paper_trader import PaperTradeResult
 
+MAX_INTERACTIVE_CHART_POINTS = 900
+
+
+def _downsample_for_interactive_chart(data: pd.DataFrame, max_points: int = MAX_INTERACTIVE_CHART_POINTS) -> pd.DataFrame:
+    """Downsample long history so Plotly payload stays responsive in browser."""
+    if data.empty or len(data) <= max_points:
+        return data
+
+    step = max(1, math.ceil(len(data) / max_points))
+    sampled = data.iloc[::step].copy()
+
+    # Always keep the most recent row to anchor current signals.
+    if sampled.index[-1] != data.index[-1]:
+        sampled = pd.concat([sampled, data.iloc[[-1]]], axis=0)
+
+    sampled = sampled.drop_duplicates(subset=["Date"], keep="last")
+    return sampled
+
 
 def plot_price_chart(analysis: StockAnalysis, simulation: PaperTradeResult, output_path: Path) -> None:
     """Save static price chart for reuse and PDF export."""
     data = analysis.data
-    fig = Figure(figsize=(11, 5.5))
-    ax = fig.add_subplot(111)
+    fig = Figure(figsize=(11, 5.5), facecolor='#1a1a1a')
+    ax = fig.add_subplot(111, facecolor='#1a1a1a')
 
-    ax.plot(data["Date"], data["Close"], label="Close", linewidth=1.6)
-    ax.plot(data["Date"], data["SMA_20"], label="SMA 20", linewidth=1.0)
-    ax.plot(data["Date"], data["SMA_50"], label="SMA 50", linewidth=1.0)
-    ax.plot(data["Date"], data["SMA_200"], label="SMA 200", linewidth=1.0)
-    ax.plot(data["Date"], data["EMA_20"], label="EMA 20", linestyle="--", linewidth=1.0)
+    ax.plot(data["Date"], data["Close"], label="Close", linewidth=1.6, color='cyan')
+    ax.plot(data["Date"], data["SMA_20"], label="SMA 20", linewidth=1.0, color='magenta')
+    ax.plot(data["Date"], data["SMA_50"], label="SMA 50", linewidth=1.0, color='yellow')
+    ax.plot(data["Date"], data["SMA_200"], label="SMA 200", linewidth=1.0, color='white')
+    ax.plot(data["Date"], data["EMA_20"], label="EMA 20", linestyle="--", linewidth=1.0, color='orange')
 
     for trade in simulation.trades:
         entry_date = pd.to_datetime(trade.entry_date)
         exit_date = pd.to_datetime(trade.exit_date)
-        ax.scatter(entry_date, trade.entry_price, marker="^", s=80, color="green", label="Hypothetical Entry")
+        ax.scatter(entry_date, trade.entry_price, marker="^", s=80, color="lime", label="Hypothetical Entry")
         ax.scatter(exit_date, trade.exit_price, marker="v", s=80, color="red", label="Hypothetical Exit")
 
     handles, labels = ax.get_legend_handles_labels()
     unique: dict[str, object] = {}
     for handle, label in zip(handles, labels):
         unique[label] = handle
+    
+    legend = ax.legend(unique.values(), unique.keys(), loc="upper left")
+    for text in legend.get_texts():
+        text.set_color("white")
 
-    ax.legend(unique.values(), unique.keys(), loc="upper left")
-    ax.set_title(f"{analysis.ticker} Historical Price with Moving Averages")
-    ax.set_ylabel("Price")
-    ax.grid(alpha=0.25)
+    ax.set_title(f"{analysis.ticker} Historical Price with Moving Averages", color='white')
+    ax.set_ylabel("Price", color='white')
+    ax.tick_params(axis='x', colors='white')
+    ax.tick_params(axis='y', colors='white')
+    ax.grid(alpha=0.1)
     fig.tight_layout()
-    fig.savefig(output_path, dpi=130)
+    fig.savefig(output_path, dpi=130, facecolor='#1a1a1a')
 
 
 def plot_rsi_chart(analysis: StockAnalysis, output_path: Path) -> None:
     """Save static RSI chart for reuse and PDF export."""
     data = analysis.data
-    fig = Figure(figsize=(11, 3.2))
-    ax = fig.add_subplot(111)
+    fig = Figure(figsize=(11, 3.2), facecolor='#1a1a1a')
+    ax = fig.add_subplot(111, facecolor='#1a1a1a')
 
-    ax.plot(data["Date"], data["RSI_14"], label="RSI 14", color="tab:purple", linewidth=1.3)
+    ax.plot(data["Date"], data["RSI_14"], label="RSI 14", color="cyan", linewidth=1.3)
     ax.axhline(70, color="red", linestyle="--", linewidth=0.9)
     ax.axhline(30, color="green", linestyle="--", linewidth=0.9)
     ax.set_ylim(0, 100)
-    ax.set_title(f"{analysis.ticker} RSI")
-    ax.set_ylabel("RSI")
-    ax.set_xlabel("Date")
-    ax.grid(alpha=0.25)
+    ax.set_title(f"{analysis.ticker} RSI", color='white')
+    ax.set_ylabel("RSI", color='white')
+    ax.set_xlabel("Date", color='white')
+    ax.tick_params(axis='x', colors='white')
+    ax.tick_params(axis='y', colors='white')
+    ax.grid(alpha=0.1)
     fig.tight_layout()
-    fig.savefig(output_path, dpi=130)
+    fig.savefig(output_path, dpi=130, facecolor='#1a1a1a')
 
 
 def ensure_static_charts(analysis: StockAnalysis, simulation: PaperTradeResult, charts_dir: Path) -> tuple[str, str]:
@@ -94,7 +120,7 @@ def cache_busted_chart_url(
 
 def build_interactive_chart(analysis: StockAnalysis, simulation: PaperTradeResult) -> str:
     """Build local interactive Plotly chart with price indicators and RSI."""
-    data = analysis.data
+    data = _downsample_for_interactive_chart(analysis.data)
     date_series = pd.to_datetime(data["Date"], errors="coerce").dropna().sort_values()
     recent_start: pd.Timestamp | None = None
     recent_end: pd.Timestamp | None = None
@@ -197,7 +223,7 @@ def build_interactive_chart(analysis: StockAnalysis, simulation: PaperTradeResul
 
     figure.update_layout(
         title=f"{analysis.ticker} Interactive Historical View",
-        template="plotly_white",
+        template="plotly_dark",
         hovermode="x unified",
         legend={"orientation": "h", "y": 1.12},
         margin={"l": 30, "r": 20, "t": 60, "b": 30},

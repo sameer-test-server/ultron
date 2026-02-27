@@ -1,0 +1,26 @@
+{
+  "ADANIENT.NS": {
+    "ema_abs_error_pct": 1.85,
+    "ema_bias_pct": 0.11,
+    "ema_hit_rate": 51.5385,
+    "latest_observation_date": "2026-02-27",
+    "training_updates": 2,
+    "updated_at": "2026-02-27 10:19:51"
+  },
+  "HINDALCO.NS": {
+    "ema_abs_error_pct": 1.53,
+    "ema_bias_pct": 0.04,
+    "ema_hit_rate": 52.16,
+    "latest_observation_date": "2026-02-27",
+    "training_updates": 1,
+    "updated_at": "2026-02-27 09:20:13"
+  },
+  "RELIANCE.NS": {
+    "ema_abs_error_pct": 1.05,
+    "ema_bias_pct": 0.02,
+    "ema_hit_rate": 50.4385,
+    "latest_observation_date": "2026-02-27",
+    "training_updates": 2,
+    "updated_at": "2026-02-27 09:38:32"
+  }
+}

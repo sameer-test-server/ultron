@@ -7,7 +7,7 @@ from typing import Callable
 
 import pandas as pd
 
-from core.data_reader import read_stock_csv
+from core.data_reader import read_stock_data
 from core.indicators import add_indicators
 from core.regime_detector import RegimeAssessment, detect_regime
 
@@ -56,9 +56,9 @@ class StockAnalyst:
     def _load_with_fallback(self, ticker: str) -> pd.DataFrame:
         """Load local data; refresh all data once if file is missing or empty."""
         def _read() -> pd.DataFrame:
-            frame = read_stock_csv(ticker)
+            frame = read_stock_data(ticker)
             if frame.empty:
-                raise ValueError(f"CSV has no valid rows for {ticker}")
+                raise ValueError(f"Data file has no valid rows for {ticker}")
             return frame
 
         try:

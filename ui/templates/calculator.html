@@ -1,0 +1,291 @@
+{% extends "base.html" %}
+
+{% block title %}Ultron Calculator{% endblock %}
+
+{% block content %}
+<div class="dashboard-shell calculator-shell">
+    <section class="card hero-panel hero-panel--calculator mb-4">
+        <div class="hero-left">
+            <p class="hero-kicker mb-2">ULTRON CALCULATOR</p>
+            <h1 class="h2 mb-2">Investment Decision Engine</h1>
+            <p class="text-body-secondary mb-0">
+                Select a company, set capital and risk profile, then get allocation guidance, entry timing,
+                suggested holding period, and Ultron price targets.
+            </p>
+        </div>
+        <div class="hero-right">
+            <div class="hero-meta-item">
+                <span class="meta-label">Last Analysis Run</span>
+                <span class="meta-value">{{ last_run.strftime('%b %d, %H:%M:%S') if last_run else 'N/A' }}</span>
+            </div>
+            <div class="hero-meta-item">
+                <span class="meta-label">Analysis Status</span>
+                <span class="meta-value">{{ analysis_status|upper }}</span>
+            </div>
+            <div class="hero-meta-item">
+                <span class="meta-label">Status Note</span>
+                <span class="meta-value">{{ analysis_message }}</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="card p-3 p-lg-4 mb-4">
+        <form method="get" action="{{ url_for('ultron_calculator') }}" class="row g-3 align-items-end">
+            <div class="col-lg-3">
+                <label for="ticker" class="form-label small">Company (Ticker)</label>
+                <select id="ticker" name="ticker" class="form-select form-select-sm">
+                    {% for ticker in available_tickers %}
+                    <option value="{{ ticker }}" {% if ticker == selected_ticker %}selected{% endif %}>{{ ticker }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-lg-3">
+                <label for="capital" class="form-label small">Capital (INR)</label>
+                <input id="capital" name="capital" type="number" min="1000" step="1000" value="{{ '%.2f'|format(capital) }}" class="form-control form-control-sm">
+            </div>
+            <div class="col-lg-3">
+                <label for="risk" class="form-label small">Risk Profile</label>
+                <select id="risk" name="risk" class="form-select form-select-sm">
+                    <option value="low" {% if risk_profile == 'low' %}selected{% endif %}>Low (Conservative)</option>
+                    <option value="medium" {% if risk_profile == 'medium' %}selected{% endif %}>Medium (Balanced)</option>
+                    <option value="high" {% if risk_profile == 'high' %}selected{% endif %}>High (Aggressive)</option>
+                </select>
+            </div>
+            <div class="col-lg-2">
+                <label for="horizon_days" class="form-label small">Horizon (Days)</label>
+                <input id="horizon_days" name="horizon_days" type="number" min="1" max="90" value="{{ horizon_days }}" class="form-control form-control-sm">
+            </div>
+            <div class="col-lg-1 d-grid">
+                <button type="submit" class="btn btn-sm btn-primary">Run</button>
+            </div>
+        </form>
+    </section>
+
+    {% if not stocks_ready %}
+    <section class="card p-4 text-center">
+        <h2 class="h5 mb-2">No Analyzed Stocks Available</h2>
+        <p class="text-body-secondary mb-0">Run analysis first, then open this page again.</p>
+    </section>
+    {% elif selected_stock is none or calculator_result is none %}
+    <section class="card p-4 text-center">
+        <h2 class="h5 mb-2">{{ selected_ticker }} Unavailable</h2>
+        <p class="text-body-secondary mb-0">{{ reason or 'Calculator output could not be generated for this ticker.' }}</p>
+    </section>
+    {% else %}
+    {% set decision = calculator_result.decision %}
+    <section class="card p-3 p-lg-4 mb-4 border-warning-subtle">
+        <p class="small mb-0 text-body-secondary">{{ calculator_result.accuracy_note }}</p>
+    </section>
+    <div class="row g-4 mb-4">
+        <div class="col-xl-4">
+            <section class="card p-3 p-lg-4 h-100">
+                <h2 class="h6 mb-3">Ultron Decision</h2>
+                <div class="mb-3">
+                    <span class="badge rounded-pill fs-6 {% if decision == 'INVEST' %}bg-success-soft{% elif decision == 'PARTIAL INVEST' %}bg-secondary-soft{% else %}bg-danger-soft{% endif %}">
+                        {{ decision }}
+                    </span>
+                </div>
+                <p class="small text-body-secondary mb-3">{{ calculator_result.decision_reason }}</p>
+                <div class="small">
+                    <div class="d-flex justify-content-between mb-2"><span>Recommended Allocation</span><strong>{{ '%.2f'|format(calculator_result.recommended_allocation_pct) }}%</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>Recommended Amount</span><strong>₹{{ '%.2f'|format(calculator_result.recommended_amount) }}</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>Hold Period</span><strong>{{ calculator_result.recommended_holding_days }} days</strong></div>
+                    <div class="d-flex justify-content-between mb-0"><span>Risk Profile</span><strong>{{ risk_profile|title }}</strong></div>
+                </div>
+            </section>
+        </div>
+
+        <div class="col-xl-4">
+            <section class="card p-3 p-lg-4 h-100">
+                <h2 class="h6 mb-3">When To Enter</h2>
+                <p class="small mb-3">{{ calculator_result.entry_timing }}</p>
+                <div class="small">
+                    <div class="d-flex justify-content-between mb-2"><span>Current Close</span><strong>₹{{ '%.2f'|format(calculator_result.last_close) }}</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>20D Average</span><strong>₹{{ '%.2f'|format(calculator_result.sma20) }}</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>RSI (14)</span><strong>{{ '%.2f'|format(calculator_result.rsi14) }}</strong></div>
+                    <div class="d-flex justify-content-between mb-0"><span>Reference Date</span><strong>{{ calculator_result.last_date }}</strong></div>
+                </div>
+            </section>
+        </div>
+
+        <div class="col-xl-4">
+            <section class="card p-3 p-lg-4 h-100">
+                <h2 class="h6 mb-3">Risk Plan + Learning Quality</h2>
+                <div class="small">
+                    <div class="d-flex justify-content-between mb-2"><span>Suggested Stop Loss</span><strong>{{ '%.2f'|format(calculator_result.stop_loss_pct) }}%</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>Suggested Take Profit</span><strong>{{ '%.2f'|format(calculator_result.take_profit_pct) }}%</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>1-Day Calibrated Return</span><strong class="{{ 'text-success' if calculator_result.expected_1d_return_pct >= 0 else 'text-danger' }}">{{ '%+.2f'|format(calculator_result.expected_1d_return_pct) }}%</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>{{ horizon_days }}-Day Calibrated Return</span><strong class="{{ 'text-success' if calculator_result.expected_horizon_return_pct >= 0 else 'text-danger' }}">{{ '%+.2f'|format(calculator_result.expected_horizon_return_pct) }}%</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>Raw {{ horizon_days }}-Day Return</span><strong class="{{ 'text-success' if calculator_result.raw_expected_horizon_return_pct >= 0 else 'text-danger' }}">{{ '%+.2f'|format(calculator_result.raw_expected_horizon_return_pct) }}%</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>Learning Quality</span><strong>{{ calculator_result.model_learning.quality_label }} ({{ '%.1f'|format(calculator_result.model_learning.quality_score_pct) }}%)</strong></div>
+                    <div class="d-flex justify-content-between mb-0"><span>Training Updates</span><strong>{{ calculator_result.model_learning.training_updates }}</strong></div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <div class="row g-4 mb-4">
+        <div class="col-xl-7">
+            <section class="card p-3 p-lg-4 h-100">
+                <h2 class="h6 mb-3">Ultron Price Forecast</h2>
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <div class="mini-stat h-100">
+                            <p class="kpi-label">Current Close</p>
+                            <p class="mb-0 fw-bold">₹{{ '%.2f'|format(calculator_result.last_close) }}</p>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="mini-stat h-100">
+                            <p class="kpi-label">Ultron Next EOD</p>
+                            <p class="mb-0 fw-bold">₹{{ '%.2f'|format(calculator_result.ultron_next_eod_price) }}</p>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="mini-stat h-100">
+                            <p class="kpi-label">Ultron {{ horizon_days }}-Day</p>
+                            <p class="mb-0 fw-bold">₹{{ '%.2f'|format(calculator_result.ultron_horizon_price) }}</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="small text-body-secondary mt-3">
+                    {{ calculator_result.model_learning.learning_note }}
+                    Bias correction: {{ '%+.2f'|format(calculator_result.model_learning.bias_pct) }}% |
+                    Confidence multiplier: {{ '%.2f'|format(calculator_result.model_learning.confidence_multiplier) }}x
+                </div>
+                {% if prediction_tracker.rows %}
+                {% set latest_track = prediction_tracker.rows[0] %}
+                <div class="table-responsive mt-3">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th>Prediction Date</th>
+                                <th>Target EOD Date</th>
+                                <th class="text-end">Ultron Price</th>
+                                <th class="text-end">Actual EOD Price</th>
+                                <th class="text-end">Error</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td class="mono">{{ latest_track.prediction_date }}</td>
+                                <td class="mono">{{ latest_track.target_date }}</td>
+                                <td class="text-end mono">₹{{ '%.2f'|format(latest_track.predicted_close) }}</td>
+                                <td class="text-end mono">₹{{ '%.2f'|format(latest_track.actual_close) }}</td>
+                                <td class="text-end mono {{ 'text-success' if latest_track.error_pct <= 0 else 'text-danger' }}">{{ '%+.2f'|format(latest_track.error_pct) }}%</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="small text-body-secondary mt-3 mb-0">Not enough completed sessions to compare predicted and actual EOD prices.</p>
+                {% endif %}
+            </section>
+        </div>
+
+        <div class="col-xl-5">
+            <section class="card p-3 p-lg-4 h-100">
+                <h2 class="h6 mb-3">Company Snapshot</h2>
+                <div class="small">
+                    <div class="d-flex justify-content-between mb-2"><span>Ticker</span><strong>{{ selected_stock.ticker }}</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>Regime</span><strong>{{ selected_stock.regime }}</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>Confidence</span><strong>{{ selected_stock.confidence_label }}</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>Volatility</span><strong>{{ selected_stock.volatility_label }}</strong></div>
+                    {% if stock_context_cards %}
+                    <div class="d-flex justify-content-between mb-2"><span>Sector</span><strong>{{ stock_context_cards.sector_name }}</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>20D Return</span><strong class="{{ 'text-success' if (stock_context_cards.stock_20d_return_pct or 0) >= 0 else 'text-danger' }}">{{ '%+.2f'|format(stock_context_cards.stock_20d_return_pct or 0) }}%</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>52W Status</span><strong>{{ stock_context_cards.breakout.label }}</strong></div>
+                    {% endif %}
+                    {% if nse_quote %}
+                    <div class="d-flex justify-content-between mb-2"><span>Day Change</span><strong class="{{ 'text-success' if (nse_quote.day_change_pct or 0) >= 0 else 'text-danger' }}">{{ '%+.2f'|format(nse_quote.day_change_pct or 0) }}%</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>Day Range</span><strong>₹{{ '%.2f'|format(nse_quote.day_low) }} - ₹{{ '%.2f'|format(nse_quote.day_high) }}</strong></div>
+                    <div class="d-flex justify-content-between mb-2"><span>52W Range</span><strong>₹{{ '%.2f'|format(nse_quote.week_52_low) }} - ₹{{ '%.2f'|format(nse_quote.week_52_high) }}</strong></div>
+                    <div class="d-flex justify-content-between mb-0"><span>Latest Volume</span><strong>{{ nse_quote.volume }}</strong></div>
+                    {% endif %}
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <section class="card p-3 p-lg-4 mb-4">
+        <h2 class="h6 mb-3">Projection Summary</h2>
+        {% if projection_rows %}
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Horizon</th>
+                        <th class="text-end">Raw Return</th>
+                        <th class="text-end">Calibrated Return</th>
+                        <th class="text-end">Projected Value</th>
+                        <th class="text-end">Projected Gain</th>
+                        <th class="text-end">Direction Hit Rate</th>
+                        <th class="text-end">Avg Error</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in projection_rows %}
+                    <tr>
+                        <td>{{ row.horizon_days }} days</td>
+                        <td class="text-end {{ 'text-success' if (row.raw_expected_return_pct or 0) >= 0 else 'text-danger' }}">{{ '%+.2f'|format(row.raw_expected_return_pct or 0) }}%</td>
+                        <td class="text-end {{ 'text-success' if (row.calibrated_expected_return_pct or 0) >= 0 else 'text-danger' }}">{{ '%+.2f'|format(row.calibrated_expected_return_pct or 0) }}%</td>
+                        <td class="text-end mono">₹{{ '%.2f'|format(row.projected_value or 0) }}</td>
+                        <td class="text-end mono {{ 'text-success' if (row.projected_gain or 0) >= 0 else 'text-danger' }}">₹{{ '%+.2f'|format(row.projected_gain or 0) }}</td>
+                        <td class="text-end">{{ '%.2f'|format(row.direction_hit_rate or 0) }}%</td>
+                        <td class="text-end">{{ '%.2f'|format(row.avg_abs_error_pct or 0) }}%</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="small text-body-secondary mb-0">Projection data is currently unavailable for this ticker.</p>
+        {% endif %}
+    </section>
+
+    <section class="card p-3 p-lg-4">
+        <h2 class="h6 mb-3">End-of-Day: Ultron Price vs Actual Price</h2>
+        {% if prediction_tracker.rows %}
+        <p class="small text-body-secondary">
+            Direction hit rate: <strong>{{ '%.2f'|format(prediction_tracker.hit_rate or 0) }}%</strong>,
+            average absolute error: <strong>{{ '%.2f'|format(prediction_tracker.avg_abs_error_pct or 0) }}%</strong>,
+            mean signed error: <strong>{{ '%+.2f'|format(prediction_tracker.mean_error_pct or 0) }}%</strong>,
+            samples: <strong>{{ prediction_tracker.total_samples }}</strong>
+        </p>
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Prediction Date</th>
+                        <th>Target EOD Date</th>
+                        <th class="text-end">Base Close</th>
+                        <th class="text-end">Ultron Predicted EOD</th>
+                        <th class="text-end">Actual EOD</th>
+                        <th class="text-end">Pred Return</th>
+                        <th class="text-end">Actual Return</th>
+                        <th class="text-end">Error</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in prediction_tracker.rows %}
+                    <tr>
+                        <td class="mono">{{ row.prediction_date }}</td>
+                        <td class="mono">{{ row.target_date }}</td>
+                        <td class="text-end mono">₹{{ '%.2f'|format(row.start_close) }}</td>
+                        <td class="text-end mono">₹{{ '%.2f'|format(row.predicted_close) }}</td>
+                        <td class="text-end mono">₹{{ '%.2f'|format(row.actual_close) }}</td>
+                        <td class="text-end {{ 'text-success' if row.predicted_return_pct >= 0 else 'text-danger' }}">{{ '%+.2f'|format(row.predicted_return_pct) }}%</td>
+                        <td class="text-end {{ 'text-success' if row.actual_return_pct >= 0 else 'text-danger' }}">{{ '%+.2f'|format(row.actual_return_pct) }}%</td>
+                        <td class="text-end mono {{ 'text-success' if row.error_pct <= 0 else 'text-danger' }}">{{ '%+.2f'|format(row.error_pct) }}%</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="small text-body-secondary mb-0">Not enough data to build EOD prediction tracker yet.</p>
+        {% endif %}
+    </section>
+    {% endif %}
+</div>
+{% endblock %}

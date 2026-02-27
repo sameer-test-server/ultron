@@ -1,4 +1,5 @@
 import datetime
+import contextlib
 import io
 import logging
 import os
@@ -24,6 +25,9 @@ BACKFILL_TOLERANCE_DAYS = 14
 LOGGER = logging.getLogger("ultron.data_loader")
 _NSE_BHAVCOPY_CACHE = {}
 _HOST_RESOLUTION_CACHE = {}
+
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+logging.getLogger("curl_cffi").setLevel(logging.CRITICAL)
 
 
 def _emit(message, level=logging.INFO):
@@ -62,7 +66,7 @@ def _normalize_downloaded_data(dataframe):
 
 
 def _clean_and_save(dataframe, csv_path):
-    """Deduplicate, sort by date, and overwrite CSV."""
+    """Deduplicate, sort by date, and overwrite CSV and Feather files."""
     if dataframe.empty:
         return False
 
@@ -76,7 +80,18 @@ def _clean_and_save(dataframe, csv_path):
     if cleaned.empty:
         return False
 
+    # Save canonical CSV
     cleaned.to_csv(csv_path, index=False)
+
+    # Save performant Feather version for faster reads
+    try:
+        feather_path = os.path.splitext(csv_path)[0] + ".feather"
+        cleaned.to_feather(feather_path)
+    except Exception:
+        # If Feather write fails, don't block the overall update.
+        # The reader will fall back to CSV.
+        pass
+
     return True
 
 
@@ -146,26 +161,37 @@ def _yahoo_dns_unavailable():
     return not any(_host_resolves(host) for host in hosts)
 
 
+def _safe_yf_download(*args, **kwargs):
+    """Run yfinance download while suppressing noisy stderr/stdout output."""
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            result = yf.download(*args, **kwargs)
+    except Exception:
+        return pd.DataFrame()
+    if isinstance(result, pd.DataFrame):
+        return result
+    return pd.DataFrame()
+
+
 def _download_from_yahoo(ticker, start_date, end_date):
     """Primary source: yfinance daily candles."""
     attempts = 2
     backoff = 1.0
     for attempt in range(1, attempts + 1):
-        try:
-            downloaded = yf.download(
-                ticker,
-                start=start_date,
-                end=end_date,
-                interval="1d",
-                progress=False,
-                auto_adjust=False,
-            )
-            return _normalize_downloaded_data(downloaded)
-        except Exception:
-            if attempt == attempts:
-                raise
-            time.sleep(backoff)
-            backoff *= 2
+        downloaded = _safe_yf_download(
+            ticker,
+            start=start_date,
+            end=end_date,
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+            threads=False,
+        )
+        normalized = _normalize_downloaded_data(downloaded)
+        if not normalized.empty or attempt == attempts:
+            return normalized
+        time.sleep(backoff)
+        backoff *= 2
 
 
 def _nse_bhavcopy_url(trade_date):
@@ -364,21 +390,22 @@ def _download_from_alpha_vantage(ticker, start_date, end_date):
 def _download_with_fallback(ticker, start_date, end_date, allow_empty):
     """Attempt Yahoo first, then NSE Bhavcopy, then Stooq."""
     days_requested = (end_date - start_date).days
-    try:
-        yahoo_df = _download_from_yahoo(ticker, start_date, end_date)
-        if not yahoo_df.empty:
-            return yahoo_df, "yahoo"
+    yahoo_unavailable = _yahoo_dns_unavailable()
 
-        should_fallback = (not allow_empty) or _yahoo_dns_unavailable() or days_requested >= 3
-        if not should_fallback:
-            return yahoo_df, "empty"
+    if not yahoo_unavailable:
+        try:
+            yahoo_df = _download_from_yahoo(ticker, start_date, end_date)
+            if not yahoo_df.empty:
+                return yahoo_df, "yahoo"
 
+            should_fallback = (not allow_empty) or days_requested >= 3
+            if not should_fallback:
+                return yahoo_df, "empty"
+            _emit(f"Yahoo failed for {ticker}, attempting fallback")
+        except Exception:
+            _emit(f"Yahoo failed for {ticker}, attempting fallback")
+    else:
         _emit(f"Yahoo failed for {ticker}, attempting fallback")
-    except Exception as error:
-        if _is_network_or_http_error(error):
-            _emit(f"Yahoo failed for {ticker}, attempting fallback")
-        else:
-            _emit(f"Yahoo failed for {ticker}, attempting fallback")
 
     # Respect requested range so first bootstrap can build full HISTORY_YEARS.
     nse_df = _download_from_nse_bhavcopy(ticker, start_date, end_date)

@@ -53,21 +53,43 @@ def _clean_rows(frame: pd.DataFrame) -> pd.DataFrame:
     return cleaned
 
 
-def read_stock_csv(ticker: str, data_dir: str | Path | None = None) -> pd.DataFrame:
+def read_stock_data(ticker: str, data_dir: str | Path | None = None) -> pd.DataFrame:
     """
-    Read one stock CSV from local storage and return a validated DataFrame.
+    Read one stock data file from local storage and return a validated DataFrame.
+    It first attempts to read from a `.feather` file for performance. If it
+    doesn't exist, it reads the `.csv`, and creates a `.feather` file for next time.
 
     Raises:
-        FileNotFoundError: When the CSV does not exist.
+        FileNotFoundError: When the file does not exist.
         ValueError: When required columns are missing.
     """
     base_dir = Path(data_dir) if data_dir is not None else Path(RAW_DATA_DIR)
-    csv_path = base_dir / f"{ticker}.csv"
+    feather_path = base_dir / f"{ticker}.feather"
 
+    if feather_path.exists():
+        try:
+            frame = pd.read_feather(feather_path)
+            # Feather preserves types, so we can often return early.
+            # A quick validation is still good practice.
+            if all(col in frame.columns for col in REQUIRED_COLUMNS):
+                return frame
+        except Exception:
+            # If feather read fails, fall back to CSV.
+            pass
+
+    csv_path = base_dir / f"{ticker}.csv"
     if not csv_path.exists():
-        raise FileNotFoundError(f"CSV not found: {csv_path}")
+        raise FileNotFoundError(f"Primary data file not found: {csv_path}")
 
     frame = pd.read_csv(csv_path)
     frame = _validate_columns(frame)
     frame = _clean_rows(frame)
+
+    # Save to Feather for next time, but don't block on it.
+    try:
+        frame.to_feather(feather_path)
+    except Exception:
+        # Don't let caching failures break the main data-reading path.
+        pass
+
     return frame

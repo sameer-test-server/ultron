@@ -1,88 +1,60 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Ultron Analyst UI{% endblock %}</title>
+    <title>{% block title %}Ultron Analyst{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block head_extra %}{% endblock %}
 </head>
-<body>
-    <div class="ambient-scene" aria-hidden="true">
-        <span class="orb orb-a"></span>
-        <span class="orb orb-b"></span>
-        <span class="orb orb-c"></span>
-    </div>
-    <header class="site-header-shell">
-        <div class="site-header container">
-            <div class="brand-block">
-                <p class="eyebrow">Local Trading Intelligence</p>
-                <h1>Ultron Analyst</h1>
-                <p class="subhead">Read-only historical analysis and paper-trade simulation for NIFTY 50.</p>
+<body class="d-flex flex-column min-vh-100">
+    <header class="navbar navbar-expand-lg sticky-top">
+        <nav class="container-fluid" aria-label="Main navigation">
+            <a class="navbar-brand p-0 me-0 me-lg-2" href="{{ url_for('index') }}" aria-label="Ultron">
+                <h3 class="logo mb-0"><i class="bi bi-cpu-fill"></i> Ultron</h3>
+            </a>
+            <div class="top-links ms-3">
+                <a class="nav-chip {% if request.endpoint == 'index' %}is-active{% endif %}" href="{{ url_for('index') }}">Dashboard</a>
+                <a class="nav-chip {% if request.endpoint == 'ultron_calculator' %}is-active{% endif %}" href="{{ url_for('ultron_calculator') }}">Ultron Calculator</a>
             </div>
-            <nav class="top-nav" aria-label="Primary">
-                <a href="{{ url_for('index') }}">Ultron Hub</a>
-                <span class="live-chip" aria-live="polite">
-                    <span class="live-dot" aria-hidden="true"></span>
-                    <span id="liveClock">--:--:--</span>
-                </span>
-            </nav>
-        </div>
+            <div class="ms-auto">
+                <span class="status-pill me-2">Local Engine</span>
+                <span class="navbar-text fw-bold" id="liveClock">--:--:--</span>
+            </div>
+        </nav>
     </header>
 
-    <main class="container main-content">
+    <main class="container-fluid flex-grow-1 my-4 main-container">
         {% block content %}{% endblock %}
     </main>
 
-    <footer class="site-footer">
-        <div class="container footer-inner">
-            <p>Ultron is a local analysis system. No live trade execution.</p>
-        </div>
+    <footer class="py-3 mt-auto text-center">
+        <p class="text-body-secondary small mb-0">Ultron is a local analysis system. This is not a trading platform.</p>
     </footer>
 
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
     <script>
-    (function () {
-        document.documentElement.classList.add('js-enhanced');
-
-        var clockEl = document.getElementById('liveClock');
-        if (clockEl) {
-            var renderClock = function () {
-                var now = new Date();
-                clockEl.textContent = now.toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    hour12: false
-                });
-            };
-            renderClock();
-            window.setInterval(renderClock, 1000);
-        }
-
-        var revealTargets = Array.from(document.querySelectorAll('.card, .stock-tab-btn, .projection-card, .mini-stat'));
-        revealTargets.forEach(function (node, index) {
-            node.classList.add('live-reveal');
-            node.style.setProperty('--reveal-delay', String((index % 12) * 40) + 'ms');
-        });
-
-        if ('IntersectionObserver' in window) {
-            var observer = new IntersectionObserver(function (entries) {
-                entries.forEach(function (entry) {
-                    if (!entry.isIntersecting) {
-                        return;
-                    }
-                    entry.target.classList.add('is-visible');
-                    observer.unobserve(entry.target);
-                });
-            }, { threshold: 0.08 });
-            revealTargets.forEach(function (node) { observer.observe(node); });
-        } else {
-            revealTargets.forEach(function (node) { node.classList.add('is-visible'); });
-        }
-    })();
+        (function () {
+            const clockEl = document.getElementById('liveClock');
+            if (clockEl) {
+                const renderClock = () => {
+                    const now = new Date();
+                    clockEl.textContent = now.toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: false
+                    });
+                };
+                renderClock();
+                setInterval(renderClock, 1000);
+            }
+        })();
     </script>
     {% block scripts %}{% endblock %}
 </body>

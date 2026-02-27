@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
+import concurrent.futures as futures
+import contextlib
+import io
+import json
 import logging
+import math
 import os
 from pathlib import Path
 import sys
@@ -51,12 +56,21 @@ UI_DIR = BASE_PATH / "ui"
 STATIC_DIR = UI_DIR / "static"
 CHARTS_DIR = STATIC_DIR / "charts"
 
-LIVE_TRACKER_DEFAULT_LIMIT = 50
+LIVE_TRACKER_DEFAULT_LIMIT = 20
 LIVE_TRACKER_MAX_TICKERS = 50
 LIVE_TRACKER_REFRESH_SECONDS = 20
-LIVE_TRACKER_CACHE_SECONDS = 8
+LIVE_TRACKER_CACHE_SECONDS = 20
+LIVE_TRACKER_MAX_FAILURES = 2
+LIVE_TRACKER_FAILURE_COOLDOWN_SECONDS = 300
 ANALYSIS_REFRESH_INTERVAL_SECONDS = 300
 ANALYSIS_STATUS_POLL_SECONDS = 4
+STATE_REFRESH_CHECK_THROTTLE_SECONDS = 5
+ANALYSIS_MAX_WORKERS = max(2, min(8, (os.cpu_count() or 4)))
+ON_DEMAND_ANALYSIS_LOCK_TIMEOUT_SECONDS = 10.0
+ALLOWED_TICKERS = frozenset(NIFTY50_TICKERS)
+
+PLOTLY_VENDOR_RELATIVE_PATH = "vendor/plotly.min.js"
+PLOTLY_VENDOR_PATH = STATIC_DIR / PLOTLY_VENDOR_RELATIVE_PATH
 
 SIM_DEFAULT_INITIAL_CAPITAL = 2000.0
 SIM_DEFAULT_POSITION_SIZE_PCT = 100.0
@@ -68,6 +82,15 @@ SIM_DEFAULT_TAKE_PROFIT_PCT = 18.0
 
 PROJECTION_DEFAULT_HORIZONS = [1, 5, 20]
 PROJECTION_MAX_HORIZON_DAYS = 90
+MODEL_MEMORY_DIR = BASE_PATH / "data" / "model_memory"
+MODEL_MEMORY_FILE = MODEL_MEMORY_DIR / "ultron_predictor_memory.json"
+MODEL_LEARNING_ALPHA = 0.35
+MODEL_MIN_SAMPLES = 25
+CALIBRATED_RETURN_MIN_PCT = -99.0
+CALIBRATED_RETURN_MAX_PCT = 250.0
+
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+logging.getLogger("curl_cffi").setLevel(logging.CRITICAL)
 
 SECTOR_BY_TICKER: dict[str, str] = {
     "HDFCBANK.NS": "Banking",
@@ -198,15 +221,26 @@ def create_app() -> Flask:
         static_folder=str(STATIC_DIR),
     )
     app.config["TEMPLATES_AUTO_RELOAD"] = True
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 86400
 
     CHARTS_DIR.mkdir(parents=True, exist_ok=True)
     PDF_DIR.mkdir(parents=True, exist_ok=True)
+    PLOTLY_VENDOR_PATH.parent.mkdir(parents=True, exist_ok=True)
     logger = _configure_ui_logger()
     _warn_if_multi_worker(logger)
     logger.info("UI app initialized")
 
+    if not PLOTLY_VENDOR_PATH.exists():
+        try:
+            PLOTLY_VENDOR_PATH.write_text(get_plotlyjs(), encoding="utf-8")
+            logger.info("Wrote local Plotly bundle: %s", PLOTLY_VENDOR_PATH)
+        except Exception as exc:
+            logger.warning("Failed to write local Plotly bundle: %s", exc)
+
     analyst = StockAnalyst(refresh_callback=None)
     state_lock = threading.RLock()
+    per_ticker_lock_guard = threading.Lock()
+    per_ticker_locks: dict[str, threading.Lock] = {}
     analysis_thread: threading.Thread | None = None
     scheduler_thread: threading.Thread | None = None
     scheduler_stop_event = threading.Event()
@@ -216,12 +250,54 @@ def create_app() -> Flask:
         "stocks": {},
         "errors": {},
         "data_signature": None,
+        "model_memory": {},
         "live_quotes_cache": None,
+        "live_quotes_failures": 0,
+        "live_quotes_disabled_until": None,
         "analysis_status": "idle",
         "analysis_message": "Not started",
         "analysis_started_at": None,
         "analysis_finished_at": None,
+        "last_refresh_check_at": None,
     }
+
+    def _safe_yf_download(*args: Any, **kwargs: Any) -> pd.DataFrame:
+        """Run yfinance download with noisy stderr/stdout suppressed."""
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                result = yf.download(*args, **kwargs)
+        except Exception:
+            return pd.DataFrame()
+        if isinstance(result, pd.DataFrame):
+            return result
+        return pd.DataFrame()
+
+    def _load_model_memory_from_disk() -> dict[str, Any]:
+        """Load persistent calibration memory used by the calculator."""
+        if not MODEL_MEMORY_FILE.exists():
+            return {}
+        try:
+            raw = MODEL_MEMORY_FILE.read_text(encoding="utf-8")
+            payload = json.loads(raw)
+        except Exception as exc:
+            logger.warning("Failed to read model memory file: %s", exc)
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        return payload
+
+    def _save_model_memory_to_disk(memory: dict[str, Any]) -> None:
+        """Persist calibration memory safely."""
+        try:
+            MODEL_MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+            MODEL_MEMORY_FILE.write_text(
+                json.dumps(memory, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("Failed to write model memory file: %s", exc)
+
+    state["model_memory"] = _load_model_memory_from_disk()
 
     def _compute_data_signature() -> tuple[int, int, int]:
         """
@@ -239,6 +315,15 @@ def create_app() -> Flask:
         latest_mtime = max(path.stat().st_mtime_ns for path in csv_files)
         total_size = sum(path.stat().st_size for path in csv_files)
         return (len(csv_files), total_size, latest_mtime)
+
+    def _ticker_lock(ticker: str) -> threading.Lock:
+        """Return a stable lock for one ticker to prevent duplicate on-demand analysis."""
+        with per_ticker_lock_guard:
+            lock = per_ticker_locks.get(ticker)
+            if lock is None:
+                lock = threading.Lock()
+                per_ticker_locks[ticker] = lock
+            return lock
 
     def _safe_float(value: Any, default: float = 0.0) -> float:
         """Convert optional numeric values to finite float safely."""
@@ -532,42 +617,571 @@ def create_app() -> Flask:
         """Build forward estimate from historical daily returns."""
         return projection_payload(analysis, amount, horizon_days)
 
+    def _serialize_stock_summary(stock: StockViewModel) -> dict[str, Any]:
+        """Convert stock view model to lightweight JSON for API."""
+        return {
+            "ticker": stock.ticker,
+            "regime": stock.regime,
+            "confidence": round(stock.confidence, 2),
+            "confidence_label": stock.confidence_label,
+            "volatility_value": round(stock.volatility_value, 4),
+            "volatility_label": stock.volatility_label,
+            "hypothetical_return_pct": round(stock.hypothetical_return_pct, 2),
+            "explanation": stock.explanation,
+            "trend_note": stock.trend_note,
+            "momentum_note": stock.momentum_note,
+            "volatility_note": stock.volatility_note,
+            "win_rate": round(stock.simulation.win_rate, 1),
+            "trades_count": len(stock.simulation.trades),
+        }
+
+    def _build_eod_prediction_tracker(
+        analysis: StockAnalysis,
+        sample_size: int = 20,
+        lookback: int = 60,
+    ) -> dict[str, Any]:
+        """
+        Build recent completed EOD prediction-vs-actual rows.
+        Prediction model mirrors projection drift logic with a rolling history window.
+        """
+        data = analysis.data.copy()
+        data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
+        data["Close"] = pd.to_numeric(data["Close"], errors="coerce")
+        data = data.dropna(subset=["Date", "Close"]).sort_values("Date").drop_duplicates(subset=["Date"], keep="last")
+
+        if len(data) < max(lookback + 2, 35):
+            return {
+                "rows": [],
+                "hit_rate": None,
+                "avg_abs_error_pct": None,
+                "mean_error_pct": None,
+                "total_samples": 0,
+                "latest_observation_date": None,
+            }
+
+        close = data["Close"].reset_index(drop=True)
+        dates = data["Date"].reset_index(drop=True)
+        rows: list[dict[str, Any]] = []
+
+        for idx in range(lookback, len(close) - 1):
+            history_slice = close.iloc[idx - lookback : idx]
+            history_returns = history_slice.pct_change().dropna()
+            if len(history_returns) < 12:
+                continue
+
+            short_window = min(20, len(history_returns))
+            long_window = min(60, len(history_returns))
+            drift = (0.65 * float(history_returns.tail(short_window).mean())) + (
+                0.35 * float(history_returns.tail(long_window).mean())
+            )
+
+            start_close = float(close.iloc[idx])
+            actual_close = float(close.iloc[idx + 1])
+            predicted_close = start_close * (1.0 + drift)
+            actual_return = (actual_close / start_close) - 1.0 if start_close > 0 else 0.0
+            error_pct = ((predicted_close / actual_close) - 1.0) * 100.0 if actual_close > 0 else 0.0
+
+            rows.append(
+                {
+                    "prediction_date": dates.iloc[idx].strftime("%Y-%m-%d"),
+                    "target_date": dates.iloc[idx + 1].strftime("%Y-%m-%d"),
+                    "start_close": round(start_close, 2),
+                    "predicted_close": round(predicted_close, 2),
+                    "actual_close": round(actual_close, 2),
+                    "predicted_return_pct": round(drift * 100.0, 2),
+                    "actual_return_pct": round(actual_return * 100.0, 2),
+                    "error_pct": round(error_pct, 2),
+                    "abs_error_pct": round(abs(error_pct), 2),
+                    "direction_hit": (drift == 0 and actual_return == 0) or (drift * actual_return > 0),
+                }
+            )
+
+        if not rows:
+            return {
+                "rows": [],
+                "hit_rate": None,
+                "avg_abs_error_pct": None,
+                "mean_error_pct": None,
+                "total_samples": 0,
+                "latest_observation_date": None,
+            }
+
+        recent_rows = list(reversed(rows[-sample_size:]))
+        direction_hits = sum(1 for item in rows if item["direction_hit"])
+        hit_rate = (direction_hits / len(rows)) * 100.0 if rows else None
+        avg_abs_error = (
+            sum(float(item["abs_error_pct"]) for item in rows) / len(rows)
+            if rows
+            else None
+        )
+        mean_error = (
+            sum(float(item["error_pct"]) for item in rows) / len(rows)
+            if rows
+            else None
+        )
+        latest_observation_date = dates.iloc[-1].strftime("%Y-%m-%d") if not dates.empty else None
+
+        return {
+            "rows": recent_rows,
+            "hit_rate": round(hit_rate, 2) if hit_rate is not None else None,
+            "avg_abs_error_pct": round(avg_abs_error, 2) if avg_abs_error is not None else None,
+            "mean_error_pct": round(mean_error, 2) if mean_error is not None else None,
+            "total_samples": len(rows),
+            "latest_observation_date": latest_observation_date,
+        }
+
+    def _build_learning_profile(ticker: str, prediction_tracker: dict[str, Any]) -> dict[str, Any]:
+        """Build self-learning calibration profile from stored and current prediction errors."""
+        samples = int(prediction_tracker.get("total_samples") or 0)
+        hit_rate = float(prediction_tracker.get("hit_rate") or 0.0)
+        avg_abs_error_pct = float(prediction_tracker.get("avg_abs_error_pct") or 0.0)
+        mean_error_pct = float(prediction_tracker.get("mean_error_pct") or 0.0)
+        latest_observation_date = prediction_tracker.get("latest_observation_date")
+
+        with state_lock:
+            memory = state.get("model_memory", {})
+            entry = memory.get(ticker, {}) if isinstance(memory.get(ticker, {}), dict) else {}
+
+        ema_hit_rate = float(entry.get("ema_hit_rate", hit_rate))
+        ema_abs_error_pct = float(entry.get("ema_abs_error_pct", avg_abs_error_pct))
+        ema_bias_pct = float(entry.get("ema_bias_pct", mean_error_pct))
+        training_updates = int(entry.get("training_updates", 0))
+        previous_observation_date = entry.get("latest_observation_date")
+
+        has_fresh_sample = (
+            samples >= MODEL_MIN_SAMPLES
+            and latest_observation_date is not None
+            and latest_observation_date != previous_observation_date
+        )
+        if has_fresh_sample:
+            alpha = MODEL_LEARNING_ALPHA
+            if training_updates > 0:
+                ema_hit_rate = ((1.0 - alpha) * ema_hit_rate) + (alpha * hit_rate)
+                ema_abs_error_pct = ((1.0 - alpha) * ema_abs_error_pct) + (alpha * avg_abs_error_pct)
+                ema_bias_pct = ((1.0 - alpha) * ema_bias_pct) + (alpha * mean_error_pct)
+            else:
+                ema_hit_rate = hit_rate
+                ema_abs_error_pct = avg_abs_error_pct
+                ema_bias_pct = mean_error_pct
+
+            training_updates += 1
+
+            updated_entry = {
+                "ema_hit_rate": round(ema_hit_rate, 4),
+                "ema_abs_error_pct": round(ema_abs_error_pct, 4),
+                "ema_bias_pct": round(ema_bias_pct, 4),
+                "training_updates": training_updates,
+                "latest_observation_date": latest_observation_date,
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+
+            with state_lock:
+                live_memory = state.get("model_memory", {})
+                if not isinstance(live_memory, dict):
+                    live_memory = {}
+                live_memory[ticker] = updated_entry
+                state["model_memory"] = live_memory
+                memory_to_save = dict(live_memory)
+            _save_model_memory_to_disk(memory_to_save)
+
+        sample_factor = max(0.0, min(1.0, samples / 180.0))
+        hit_factor = max(0.0, min(1.0, (ema_hit_rate - 45.0) / 30.0))
+        error_factor = max(0.0, min(1.0, 1.0 - (ema_abs_error_pct / 10.0)))
+        quality_score = (0.45 * hit_factor) + (0.35 * error_factor) + (0.20 * sample_factor)
+        quality_pct = round(quality_score * 100.0, 2)
+
+        if quality_pct >= 72:
+            quality_label = "High"
+        elif quality_pct >= 50:
+            quality_label = "Medium"
+        else:
+            quality_label = "Low"
+
+        confidence_multiplier = max(
+            0.45,
+            min(
+                1.05,
+                (0.45 + quality_score * 0.55) * max(0.55, 1.0 - (ema_abs_error_pct / 18.0)),
+            ),
+        )
+        calibration_ready = samples >= MODEL_MIN_SAMPLES
+
+        return {
+            "calibration_ready": calibration_ready,
+            "quality_label": quality_label,
+            "quality_score_pct": quality_pct,
+            "confidence_multiplier": round(confidence_multiplier, 4),
+            "bias_pct": round(ema_bias_pct, 4),
+            "ema_hit_rate": round(ema_hit_rate, 2),
+            "ema_abs_error_pct": round(ema_abs_error_pct, 2),
+            "training_updates": training_updates,
+            "samples": samples,
+            "latest_observation_date": latest_observation_date,
+            "learning_note": (
+                "Adaptive memory is active."
+                if calibration_ready
+                else f"Collecting samples (need at least {MODEL_MIN_SAMPLES})."
+            ),
+        }
+
+    def _bounded_return_pct(value: float) -> float:
+        """Clamp projected returns to finite practical bounds."""
+        if not math.isfinite(value):
+            return 0.0
+        return max(CALIBRATED_RETURN_MIN_PCT, min(CALIBRATED_RETURN_MAX_PCT, value))
+
+    def _calibrate_projection_return(raw_expected_return_pct: float, learning_profile: dict[str, Any]) -> float:
+        """Adjust raw expected return using learned bias and confidence scaling to be more conservative."""
+        raw = _bounded_return_pct(float(raw_expected_return_pct))
+        if not learning_profile.get("calibration_ready", False):
+            return raw
+
+        bias = float(learning_profile.get("bias_pct") or 0.0)
+        multiplier = float(learning_profile.get("confidence_multiplier") or 1.0)
+        abs_error = float(learning_profile.get("ema_abs_error_pct") or 0.0)
+
+        # More conservative adjustment: subtract bias, then apply a penalty based on historical error.
+        # This "pessimism factor" makes the model under-predict to avoid costly over-predictions.
+        pessimism_penalty = abs_error * 0.33
+        adjusted_return = raw - bias
+
+        # Apply penalty more strongly to positive (optimistic) predictions.
+        if adjusted_return > 0:
+            adjusted_return -= pessimism_penalty
+
+        return _bounded_return_pct(adjusted_return * multiplier)
+
+    def _apply_calibrated_projection_values(
+        payload: dict[str, Any],
+        amount: float,
+        raw_expected_return_pct: float,
+        calibrated_expected_return_pct: float,
+    ) -> None:
+        """Align projected values/range with the calibrated expected return."""
+        if amount <= 0:
+            return
+
+        raw_projected_value = float(payload.get("projected_value") or amount)
+        payload["raw_projected_value"] = round(raw_projected_value, 2)
+        payload["raw_projected_gain"] = round(raw_projected_value - amount, 2)
+
+        calibrated_projected_value = max(0.0, amount * (1.0 + (calibrated_expected_return_pct / 100.0)))
+        payload["projected_value"] = round(calibrated_projected_value, 2)
+        payload["projected_gain"] = round(calibrated_projected_value - amount, 2)
+
+        try:
+            raw_low_value = float(payload.get("range_low_value"))
+            raw_high_value = float(payload.get("range_high_value"))
+        except (TypeError, ValueError):
+            return
+
+        shift_pct = calibrated_expected_return_pct - raw_expected_return_pct
+        raw_low_return_pct = ((raw_low_value / amount) - 1.0) * 100.0
+        raw_high_return_pct = ((raw_high_value / amount) - 1.0) * 100.0
+        calibrated_low_return_pct = _bounded_return_pct(raw_low_return_pct + shift_pct)
+        calibrated_high_return_pct = _bounded_return_pct(raw_high_return_pct + shift_pct)
+
+        calibrated_low_value = max(0.0, amount * (1.0 + calibrated_low_return_pct / 100.0))
+        calibrated_high_value = max(0.0, amount * (1.0 + calibrated_high_return_pct / 100.0))
+        if calibrated_high_value < calibrated_low_value:
+            calibrated_low_value, calibrated_high_value = calibrated_high_value, calibrated_low_value
+
+        payload["range_low_value"] = round(calibrated_low_value, 2)
+        payload["range_high_value"] = round(calibrated_high_value, 2)
+
+    def _build_investment_plan(
+        stock: StockViewModel,
+        capital: float,
+        risk_profile: str,
+        horizon_days: int,
+        prediction_tracker: dict[str, Any] | None = None,
+        learning_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create recommendation for investment amount, timing, horizon, and expected prices."""
+        data = stock.analysis.data.copy()
+        required_columns = {"Date", "Close", "SMA_20", "RSI_14"}
+        missing_columns = sorted(required_columns.difference(data.columns))
+        if missing_columns:
+            raise ValueError(f"Calculator data is missing required fields: {', '.join(missing_columns)}")
+
+        data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
+        for col in ["Close", "SMA_20", "RSI_14"]:
+            data[col] = pd.to_numeric(data[col], errors="coerce")
+        data = data.dropna(subset=["Date", "Close"]).sort_values("Date")
+        if data.empty:
+            raise ValueError("No usable historical rows for calculator input.")
+        if len(data) < 35:
+            raise ValueError("Need at least 35 daily observations for stable calculator output.")
+        latest = data.iloc[-1]
+
+        last_close = float(latest["Close"])
+        sma20 = _safe_float(latest.get("SMA_20"), default=last_close)
+        rsi = _safe_float(latest.get("RSI_14"), default=50.0)
+        last_date = pd.Timestamp(latest["Date"]).strftime("%Y-%m-%d")
+
+        tracker = prediction_tracker or _build_eod_prediction_tracker(stock.analysis, sample_size=20, lookback=60)
+        learning = learning_profile or _build_learning_profile(stock.ticker, tracker)
+
+        horizons = sorted({1, 5, horizon_days})
+        projection_map: dict[int, dict[str, Any]] = {}
+        for horizon in horizons:
+            try:
+                payload = _projection_payload(stock.analysis, capital, horizon)
+                raw_expected_return_pct = _bounded_return_pct(float(payload.get("expected_return_pct") or 0.0))
+                calibrated_expected_return_pct = _calibrate_projection_return(raw_expected_return_pct, learning)
+                payload["raw_expected_return_pct"] = round(raw_expected_return_pct, 2)
+                payload["calibrated_expected_return_pct"] = round(calibrated_expected_return_pct, 2)
+                payload["expected_return_pct"] = round(calibrated_expected_return_pct, 2)
+                _apply_calibrated_projection_values(
+                    payload,
+                    capital,
+                    raw_expected_return_pct,
+                    calibrated_expected_return_pct,
+                )
+                projection_map[horizon] = payload
+            except Exception:
+                continue
+
+        if 1 not in projection_map or horizon_days not in projection_map:
+            raise ValueError(
+                f"Projection engine could not build required horizons (1 day and {horizon_days} days)."
+            )
+
+        raw_expected_1d_pct = float(projection_map.get(1, {}).get("raw_expected_return_pct", 0.0))
+        raw_expected_horizon_pct = float(projection_map.get(horizon_days, {}).get("raw_expected_return_pct", 0.0))
+        expected_1d_pct = float(projection_map.get(1, {}).get("expected_return_pct", 0.0))
+        expected_horizon_pct = float(projection_map.get(horizon_days, {}).get("expected_return_pct", 0.0))
+
+        risk_multiplier = {"low": 0.45, "medium": 0.65, "high": 0.85}.get(risk_profile, 0.65)
+        regime_multiplier = 1.0 if stock.regime == "LONG_TERM" else 0.72
+        confidence_multiplier = 0.55 + (max(0.0, min(1.0, stock.confidence)) * 0.85)
+        volatility_penalty = max(0.45, min(1.05, 1.0 - ((stock.volatility_value - 0.18) * 1.2)))
+        model_quality_penalty = max(0.55, min(1.0, float(learning.get("quality_score_pct", 50.0)) / 100.0 + 0.15))
+        allocation_pct = (
+            risk_multiplier
+            * regime_multiplier
+            * confidence_multiplier
+            * volatility_penalty
+            * model_quality_penalty
+            * 100.0
+        )
+        allocation_pct = max(8.0, min(95.0, allocation_pct))
+
+        score = 0
+        if stock.regime == "LONG_TERM":
+            score += 2
+        else:
+            score -= 1
+        if stock.confidence >= 0.65:
+            score += 2
+        elif stock.confidence >= 0.55:
+            score += 1
+        else:
+            score -= 1
+        if expected_1d_pct > 0.0:
+            score += 1
+        elif expected_1d_pct < -0.4:
+            score -= 1
+        if expected_horizon_pct > 0.0:
+            score += 2
+        elif expected_horizon_pct < 0.0:
+            score -= 2
+        if rsi > 75:
+            score -= 1
+        if sma20 > 0 and last_close < sma20:
+            score -= 1
+
+        if score >= 5:
+            decision = "INVEST"
+        elif score >= 3:
+            decision = "PARTIAL INVEST"
+        else:
+            decision = "WAIT"
+
+        if decision == "WAIT":
+            recommended_allocation_pct = 0.0
+        elif decision == "PARTIAL INVEST":
+            recommended_allocation_pct = min(allocation_pct, 45.0)
+        else:
+            recommended_allocation_pct = allocation_pct
+
+        recommended_amount = (recommended_allocation_pct / 100.0) * capital
+
+        if decision == "WAIT":
+            if sma20 > 0 and last_close < sma20:
+                entry_timing = "Wait for a daily close above the 20-day average before entering."
+            elif rsi > 70:
+                entry_timing = "Wait for RSI to cool down below 65 before entering."
+            else:
+                entry_timing = "Wait for confirmation from next 1-2 sessions."
+        elif rsi < 40:
+            entry_timing = "Accumulate in 2 tranches over the next 2 sessions."
+        elif sma20 > 0 and last_close >= sma20 and 40 <= rsi <= 68:
+            entry_timing = "Enter in the next session near open; add on intraday dips."
+        else:
+            entry_timing = "Enter with a smaller first tranche and add near the 20-day average."
+
+        base_holding_days = 35 if stock.regime == "LONG_TERM" else 10
+        if horizon_days > 5:
+            base_holding_days = int((base_holding_days + horizon_days) / 2)
+        risk_holding_multiplier = {"low": 1.3, "medium": 1.0, "high": 0.8}.get(risk_profile, 1.0)
+        recommended_holding_days = int(max(3, min(120, round(base_holding_days * risk_holding_multiplier))))
+
+        daily_volatility_pct = max(0.0, (_safe_float(stock.volatility_value) / (252**0.5)) * 100.0)
+        stop_loss_pct = max(2.5, min(12.0, daily_volatility_pct * 2.2))
+        take_profit_pct = max(stop_loss_pct * 1.6, min(24.0, stop_loss_pct * 2.4))
+
+        ultron_next_eod_price = max(0.01, last_close * (1.0 + expected_1d_pct / 100.0))
+        ultron_horizon_price = max(0.01, last_close * (1.0 + expected_horizon_pct / 100.0))
+
+        decision_reason = (
+            f"Regime {stock.regime}, confidence {stock.confidence_label}, "
+            f"{horizon_days}-day calibrated return {expected_horizon_pct:+.2f}% "
+            f"(raw {raw_expected_horizon_pct:+.2f}%)."
+        )
+        avg_abs_error_pct = float(learning.get("ema_abs_error_pct") or 0.0)
+        accuracy_note = (
+            "Outputs are probability-based estimates from historical data, not guaranteed outcomes. "
+            f"Current adaptive average absolute error: {avg_abs_error_pct:.2f}%."
+        )
+
+        return {
+            "decision": decision,
+            "decision_reason": decision_reason,
+            "recommended_allocation_pct": round(recommended_allocation_pct, 2),
+            "recommended_amount": round(recommended_amount, 2),
+            "entry_timing": entry_timing,
+            "recommended_holding_days": recommended_holding_days,
+            "stop_loss_pct": round(stop_loss_pct, 2),
+            "take_profit_pct": round(take_profit_pct, 2),
+            "expected_1d_return_pct": round(expected_1d_pct, 2),
+            "expected_horizon_return_pct": round(expected_horizon_pct, 2),
+            "raw_expected_1d_return_pct": round(raw_expected_1d_pct, 2),
+            "raw_expected_horizon_return_pct": round(raw_expected_horizon_pct, 2),
+            "ultron_next_eod_price": round(ultron_next_eod_price, 2),
+            "ultron_horizon_price": round(ultron_horizon_price, 2),
+            "last_close": round(last_close, 2),
+            "last_date": last_date,
+            "sma20": round(sma20, 2),
+            "rsi14": round(rsi, 2),
+            "accuracy_note": accuracy_note,
+            "model_learning": learning,
+            "projection_map": projection_map,
+        }
+
+    def _analyze_one_ticker(ticker: str) -> tuple[str, StockViewModel | None, str | None]:
+        """Analyze one ticker and return either model or error text."""
+        try:
+            analysis = analyst.analyze_stock(ticker)
+            simulation = simulate_paper_trades(analysis.signals, initial_capital=SIM_DEFAULT_INITIAL_CAPITAL)
+
+            vol_value = _safe_float(analysis.data.iloc[-1].get("VOLATILITY_20"))
+            vol_level = volatility_label(vol_value)
+            trend_note, momentum_note, vol_note = _build_notes(analysis, vol_level, vol_value)
+
+            stock_model = StockViewModel(
+                ticker=ticker,
+                regime=analysis.regime.regime,
+                confidence=analysis.regime.confidence,
+                confidence_label=confidence_label(analysis.regime.confidence),
+                volatility_value=vol_value,
+                volatility_label=vol_level,
+                hypothetical_return_pct=simulation.total_return_pct,
+                explanation=" ".join(analysis.insights),
+                insights=analysis.insights,
+                trend_note=trend_note,
+                momentum_note=momentum_note,
+                volatility_note=vol_note,
+                simulation=simulation,
+                analysis=analysis,
+                data_fingerprint=_data_fingerprint(analysis.data),
+            )
+            return ticker, stock_model, None
+        except Exception as exc:
+            return ticker, None, str(exc)
+
+    def _reuse_cached_render_assets(refreshed: StockViewModel, existing: StockViewModel | None) -> None:
+        """Reuse expensive chart assets when underlying data fingerprint is unchanged."""
+        if existing is None:
+            return
+        if existing.data_fingerprint != refreshed.data_fingerprint:
+            return
+        refreshed.interactive_chart_html = existing.interactive_chart_html
+        refreshed.chart_price_path = existing.chart_price_path
+        refreshed.chart_rsi_path = existing.chart_rsi_path
+
     def _run_analysis_snapshot() -> tuple[dict[str, StockViewModel], dict[str, str]]:
         """Compute analysis from local CSV files only and return fresh payload."""
         stocks: dict[str, StockViewModel] = {}
         errors: dict[str, str] = {}
 
-        for ticker in NIFTY50_TICKERS:
-            try:
-                analysis = analyst.analyze_stock(ticker)
-                simulation = simulate_paper_trades(analysis.signals, initial_capital=SIM_DEFAULT_INITIAL_CAPITAL)
+        with futures.ThreadPoolExecutor(max_workers=ANALYSIS_MAX_WORKERS) as executor:
+            jobs = {executor.submit(_analyze_one_ticker, ticker): ticker for ticker in NIFTY50_TICKERS}
+            for job in futures.as_completed(jobs):
+                fallback_ticker = jobs[job]
+                try:
+                    ticker, stock_model, error = job.result()
+                except Exception as exc:
+                    ticker = fallback_ticker
+                    stock_model = None
+                    error = str(exc)
 
-                vol_value = _safe_float(analysis.data.iloc[-1].get("VOLATILITY_20"))
-                vol_level = volatility_label(vol_value)
-                trend_note, momentum_note, vol_note = _build_notes(analysis, vol_level, vol_value)
-
-                stocks[ticker] = StockViewModel(
-                    ticker=ticker,
-                    regime=analysis.regime.regime,
-                    confidence=analysis.regime.confidence,
-                    confidence_label=confidence_label(analysis.regime.confidence),
-                    volatility_value=vol_value,
-                    volatility_label=vol_level,
-                    hypothetical_return_pct=simulation.total_return_pct,
-                    explanation=" ".join(analysis.insights),
-                    insights=analysis.insights,
-                    trend_note=trend_note,
-                    momentum_note=momentum_note,
-                    volatility_note=vol_note,
-                    simulation=simulation,
-                    analysis=analysis,
-                    data_fingerprint=_data_fingerprint(analysis.data),
-                )
-            except Exception as exc:
-                errors[ticker] = str(exc)
-                logger.warning("Analysis skipped for %s: %s", ticker, exc)
+                if stock_model is not None:
+                    stocks[ticker] = stock_model
+                else:
+                    errors[ticker] = error or "Unknown analysis error"
+                    logger.warning("Analysis skipped for %s: %s", ticker, errors[ticker])
 
         return stocks, errors
+
+    def _resolve_stock_model(ticker: str, allow_on_demand: bool = True) -> tuple[StockViewModel | None, str | None]:
+        """Return cached model or build one on-demand for requested ticker."""
+        normalized = (ticker or "").strip().upper()
+        if not normalized:
+            return None, "Ticker is required."
+        if normalized not in ALLOWED_TICKERS:
+            return None, f"{normalized} is not part of the supported ticker universe."
+
+        with state_lock:
+            cached = state["stocks"].get(normalized)
+            if cached is not None:
+                return cached, None
+            known_error = state["errors"].get(normalized)
+            status = state.get("analysis_status")
+
+        if not allow_on_demand:
+            if known_error:
+                return None, known_error
+            if status == "running":
+                return None, "Analysis is processing in the background. Please retry shortly."
+            return None, "Stock analysis is not ready yet."
+
+        ticker_lock = _ticker_lock(normalized)
+        acquired = ticker_lock.acquire(timeout=ON_DEMAND_ANALYSIS_LOCK_TIMEOUT_SECONDS)
+        if not acquired:
+            return None, f"Ticker analysis for {normalized} is still running. Please retry shortly."
+
+        try:
+            with state_lock:
+                cached = state["stocks"].get(normalized)
+                if cached is not None:
+                    return cached, None
+
+            _, stock_model, error = _analyze_one_ticker(normalized)
+            if stock_model is not None:
+                with state_lock:
+                    existing = state["stocks"].get(normalized)
+                    _reuse_cached_render_assets(stock_model, existing)
+                    state["stocks"][normalized] = stock_model
+                    state["errors"].pop(normalized, None)
+                return stock_model, None
+
+            reason = error or "Unknown analysis error"
+            with state_lock:
+                state["errors"][normalized] = reason
+            return None, reason
+        finally:
+            ticker_lock.release()
 
     def _analysis_worker(expected_signature: tuple[int, int, int]) -> None:
         """Background worker that refreshes analysis cache."""
@@ -578,14 +1192,17 @@ def create_app() -> Flask:
             with state_lock:
                 existing_stocks: dict[str, StockViewModel] = state["stocks"]
                 for ticker, refreshed in stocks.items():
-                    existing = existing_stocks.get(ticker)
-                    if existing is None:
+                    _reuse_cached_render_assets(refreshed, existing_stocks.get(ticker))
+
+                # Keep previous good data for tickers that failed in this refresh.
+                recovered_tickers = 0
+                for ticker, existing in existing_stocks.items():
+                    if ticker in stocks:
                         continue
-                    if existing.data_fingerprint != refreshed.data_fingerprint:
-                        continue
-                    refreshed.interactive_chart_html = existing.interactive_chart_html
-                    refreshed.chart_price_path = existing.chart_price_path
-                    refreshed.chart_rsi_path = existing.chart_rsi_path
+                    if ticker in errors:
+                        errors.pop(ticker, None)
+                    stocks[ticker] = existing
+                    recovered_tickers += 1
 
                 state["stocks"] = stocks
                 state["errors"] = errors
@@ -595,9 +1212,10 @@ def create_app() -> Flask:
                 state["analysis_message"] = "Analysis ready"
                 state["analysis_finished_at"] = datetime.now()
             logger.info(
-                "Background analysis completed: %s stocks, %s errors",
+                "Background analysis completed: %s stocks, %s errors (reused=%s)",
                 len(stocks),
                 len(errors),
+                recovered_tickers,
             )
         except Exception as exc:
             logger.exception("Background analysis crashed: %s", exc)
@@ -671,6 +1289,8 @@ def create_app() -> Flask:
                 "errors": dict(state["errors"]),
                 "data_signature": state["data_signature"],
                 "live_quotes_cache": state["live_quotes_cache"],
+                "live_quotes_failures": state["live_quotes_failures"],
+                "live_quotes_disabled_until": state["live_quotes_disabled_until"],
                 "analysis_status": state["analysis_status"],
                 "analysis_message": state["analysis_message"],
                 "analysis_started_at": state["analysis_started_at"],
@@ -680,17 +1300,28 @@ def create_app() -> Flask:
     def _ensure_state() -> None:
         """Ensure scheduler is running and refresh is queued when needed."""
         _start_scheduler()
-        _schedule_analysis_if_needed(force=False)
+        now = datetime.now()
+        should_refresh_check = False
+        with state_lock:
+            last_checked = state.get("last_refresh_check_at")
+            if (
+                not isinstance(last_checked, datetime)
+                or (now - last_checked).total_seconds() >= STATE_REFRESH_CHECK_THROTTLE_SECONDS
+            ):
+                state["last_refresh_check_at"] = now
+                should_refresh_check = True
+
+        if should_refresh_check:
+            _schedule_analysis_if_needed(force=False)
 
     def _sanitize_requested_tickers(raw_tickers: list[str]) -> list[str]:
         """Validate and deduplicate tickers for live tracking requests."""
-        allowed = set(NIFTY50_TICKERS)
         cleaned: list[str] = []
         seen: set[str] = set()
 
         for ticker in raw_tickers:
             normalized = ticker.strip().upper()
-            if not normalized or normalized not in allowed or normalized in seen:
+            if not normalized or normalized not in ALLOWED_TICKERS or normalized in seen:
                 continue
             cleaned.append(normalized)
             seen.add(normalized)
@@ -858,34 +1489,28 @@ def create_app() -> Flask:
         for ticker_chunk in _chunk_tickers(tickers, chunk_size=10):
             joined = " ".join(ticker_chunk)
 
-            try:
-                intraday_df = yf.download(
-                    joined,
-                    period="1d",
-                    interval="1m",
-                    auto_adjust=False,
-                    group_by="ticker",
-                    progress=False,
-                    threads=False,
-                    prepost=False,
-                    timeout=6,
-                )
-            except Exception:
-                intraday_df = pd.DataFrame()
+            intraday_df = _safe_yf_download(
+                joined,
+                period="1d",
+                interval="1m",
+                auto_adjust=False,
+                group_by="ticker",
+                progress=False,
+                threads=False,
+                prepost=False,
+                timeout=6,
+            )
 
-            try:
-                daily_df = yf.download(
-                    joined,
-                    period="5d",
-                    interval="1d",
-                    auto_adjust=False,
-                    group_by="ticker",
-                    progress=False,
-                    threads=False,
-                    timeout=6,
-                )
-            except Exception:
-                daily_df = pd.DataFrame()
+            daily_df = _safe_yf_download(
+                joined,
+                period="5d",
+                interval="1d",
+                auto_adjust=False,
+                group_by="ticker",
+                progress=False,
+                threads=False,
+                timeout=6,
+            )
 
             for ticker in ticker_chunk:
                 try:
@@ -901,6 +1526,7 @@ def create_app() -> Flask:
         now = datetime.now()
         with state_lock:
             cache = state.get("live_quotes_cache")
+            disabled_until = state.get("live_quotes_disabled_until")
         key = tuple(tickers)
 
         if cache:
@@ -911,6 +1537,14 @@ def create_app() -> Flask:
                 if age <= LIVE_TRACKER_CACHE_SECONDS:
                     return cache.get("quotes", []), cached_at
 
+        if isinstance(disabled_until, datetime) and now < disabled_until:
+            local_quotes = _build_local_quotes(tickers)
+            if local_quotes:
+                return local_quotes, now
+            if cache and cache.get("key") == key and cache.get("quotes"):
+                return cache.get("quotes", []), cache.get("fetched_at", now)
+            return [], now
+
         quotes = _fetch_live_quotes(tickers)
         if quotes:
             with state_lock:
@@ -919,7 +1553,19 @@ def create_app() -> Flask:
                     "fetched_at": now,
                     "quotes": quotes,
                 }
+                state["live_quotes_failures"] = 0
+                state["live_quotes_disabled_until"] = None
             return quotes, now
+
+        with state_lock:
+            failures = int(state.get("live_quotes_failures", 0)) + 1
+            state["live_quotes_failures"] = failures
+            if failures >= LIVE_TRACKER_MAX_FAILURES:
+                state["live_quotes_disabled_until"] = now + timedelta(seconds=LIVE_TRACKER_FAILURE_COOLDOWN_SECONDS)
+                logger.warning(
+                    "Live quote source unavailable. Switching to local cache for %s seconds.",
+                    LIVE_TRACKER_FAILURE_COOLDOWN_SECONDS,
+                )
 
         local_quotes = _build_local_quotes(tickers)
         if local_quotes:
@@ -1004,6 +1650,157 @@ def create_app() -> Flask:
             breakout_watchlist=breakout_watchlist,
         )
 
+    @app.route("/calculator")
+    def ultron_calculator() -> str:
+        """Investment calculator view with recommendation and EOD prediction tracker."""
+        _ensure_state()
+        snapshot = _snapshot_state()
+        stocks_map: dict[str, StockViewModel] = snapshot["stocks"]
+
+        available_tickers = [ticker for ticker in NIFTY50_TICKERS if ticker in stocks_map]
+        if not available_tickers:
+            available_tickers = list(NIFTY50_TICKERS)
+
+        selected_ticker = request.args.get("ticker", available_tickers[0] if available_tickers else "")
+        if selected_ticker not in stocks_map and available_tickers:
+            selected_ticker = available_tickers[0]
+
+        capital = _parse_float(request.args.get("capital"), 100000.0, 1000.0, 100000000.0)
+        risk_profile = (request.args.get("risk", "medium") or "medium").strip().lower()
+        if risk_profile not in {"low", "medium", "high"}:
+            risk_profile = "medium"
+        horizon_days = _parse_int(request.args.get("horizon_days"), 20, 1, PROJECTION_MAX_HORIZON_DAYS)
+
+        stock = stocks_map.get(selected_ticker)
+        reason = None
+        calculator_result = None
+        prediction_tracker = {
+            "rows": [],
+            "hit_rate": None,
+            "avg_abs_error_pct": None,
+            "mean_error_pct": None,
+            "total_samples": 0,
+            "latest_observation_date": None,
+        }
+        learning_profile = None
+        nse_quote = None
+        stock_context_cards = None
+        projection_rows: list[dict[str, Any]] = []
+
+        if stock is None and selected_ticker:
+            stock, reason = _resolve_stock_model(selected_ticker, allow_on_demand=True)
+            if stock is not None:
+                snapshot = _snapshot_state()
+                stocks_map = snapshot["stocks"]
+                available_tickers = [ticker for ticker in NIFTY50_TICKERS if ticker in stocks_map] or list(NIFTY50_TICKERS)
+        if stock is None:
+            if reason is None:
+                reason = snapshot["errors"].get(selected_ticker)
+            if reason is None and snapshot["analysis_status"] == "running":
+                reason = "Analysis is processing in the background. Please refresh shortly."
+            if reason is None:
+                reason = "Ticker is not available in the latest analysis snapshot."
+        else:
+            try:
+                prediction_tracker = _build_eod_prediction_tracker(stock.analysis, sample_size=20, lookback=60)
+                learning_profile = _build_learning_profile(selected_ticker, prediction_tracker)
+                calculator_result = _build_investment_plan(
+                    stock,
+                    capital,
+                    risk_profile,
+                    horizon_days,
+                    prediction_tracker=prediction_tracker,
+                    learning_profile=learning_profile,
+                )
+                nse_quote = _build_nse_quote_snapshot(stock.analysis)
+                stock_context_cards = _stock_context_cards(selected_ticker, stock, stocks_map)
+
+                for horizon in sorted(calculator_result.get("projection_map", {}).keys()):
+                    payload = calculator_result["projection_map"][horizon]
+                    projection_rows.append(
+                        {
+                            "horizon_days": horizon,
+                            "expected_return_pct": payload.get("expected_return_pct"),
+                            "raw_expected_return_pct": payload.get("raw_expected_return_pct"),
+                            "calibrated_expected_return_pct": payload.get("calibrated_expected_return_pct"),
+                            "projected_value": payload.get("projected_value"),
+                            "projected_gain": payload.get("projected_gain"),
+                            "direction_hit_rate": payload.get("direction_hit_rate"),
+                            "avg_abs_error_pct": payload.get("avg_abs_error_pct"),
+                        }
+                    )
+            except Exception as exc:
+                logger.warning("Calculator build failed for %s: %s", selected_ticker, exc)
+                reason = f"Calculator is unavailable for {selected_ticker}: {exc}"
+                calculator_result = None
+
+        return render_template(
+            "calculator.html",
+            stocks_ready=bool(stocks_map),
+            available_tickers=available_tickers,
+            selected_ticker=selected_ticker,
+            selected_stock=stock,
+            reason=reason,
+            capital=round(capital, 2),
+            risk_profile=risk_profile,
+            horizon_days=horizon_days,
+            calculator_result=calculator_result,
+            prediction_tracker=prediction_tracker,
+            learning_profile=learning_profile,
+            nse_quote=nse_quote,
+            stock_context_cards=stock_context_cards,
+            projection_rows=projection_rows,
+            last_run=snapshot["last_run"],
+            analysis_status=snapshot["analysis_status"],
+            analysis_message=snapshot["analysis_message"],
+        )
+
+    @app.route("/api/dashboard")
+    def dashboard_api():
+        """Headless API endpoint for the dashboard."""
+        _ensure_state()
+        snapshot = _snapshot_state()
+
+        regime_filter = request.args.get("regime", "ALL").upper()
+        sort_by = request.args.get("sort", "highest_return")
+
+        stocks_map: dict[str, StockViewModel] = snapshot["stocks"]
+        stocks = list(stocks_map.values())
+
+        if regime_filter in {"LONG_TERM", "SHORT_TERM"}:
+            stocks = [item for item in stocks if item.regime == regime_filter]
+
+        if sort_by == "lowest_risk":
+            stocks.sort(key=lambda item: item.volatility_value)
+        elif sort_by == "highest_confidence":
+            stocks.sort(key=lambda item: item.confidence, reverse=True)
+        else:
+            stocks.sort(key=lambda item: item.hypothetical_return_pct, reverse=True)
+
+        all_stocks = list(stocks_map.values())
+        long_term_count = sum(1 for item in all_stocks if item.regime == "LONG_TERM")
+        short_term_count = sum(1 for item in all_stocks if item.regime == "SHORT_TERM")
+        best_return = max((item.hypothetical_return_pct for item in all_stocks), default=0.0)
+        worst_return = min((item.hypothetical_return_pct for item in all_stocks), default=0.0)
+
+        return jsonify({
+            "meta": {
+                "last_run": snapshot["last_run"].isoformat() if snapshot["last_run"] else None,
+                "analysis_status": snapshot["analysis_status"],
+                "analysis_message": snapshot["analysis_message"],
+                "total_analyzed": len(all_stocks),
+            },
+            "summary": {
+                "long_term_count": long_term_count,
+                "short_term_count": short_term_count,
+                "best_return_pct": round(best_return, 2),
+                "worst_return_pct": round(worst_return, 2),
+            },
+            "watchlist": _build_dashboard_breakout_watchlist(stocks_map, limit=8),
+            "stocks": [_serialize_stock_summary(s) for s in stocks],
+            "errors": snapshot["errors"]
+        })
+
     @app.route("/api/analysis-status")
     def analysis_status():
         """Expose background analysis status for lightweight UI polling."""
@@ -1052,9 +1849,12 @@ def create_app() -> Flask:
         snapshot = _snapshot_state()
         stock = snapshot["stocks"].get(ticker)
         if stock is None:
-            reason = snapshot["errors"].get(ticker) or "Stock analysis is not ready yet."
+            stock, reason = _resolve_stock_model(ticker, allow_on_demand=True)
+        if stock is None:
+            reason = reason or snapshot["errors"].get(ticker) or "Stock analysis is not ready yet."
             logger.warning("Simulation API requested unavailable ticker %s: %s", ticker, reason)
-            return jsonify({"error": reason}), 404
+            status_code = 404 if (ticker or "").strip().upper() not in ALLOWED_TICKERS else 503
+            return jsonify({"error": reason}), status_code
 
         capital = _parse_float(request.args.get("capital"), SIM_DEFAULT_INITIAL_CAPITAL, 100.0, 100000000.0)
         position_size_pct = _parse_float(
@@ -1108,9 +1908,12 @@ def create_app() -> Flask:
         snapshot = _snapshot_state()
         stock = snapshot["stocks"].get(ticker)
         if stock is None:
-            reason = snapshot["errors"].get(ticker) or "Stock analysis is not ready yet."
+            stock, reason = _resolve_stock_model(ticker, allow_on_demand=True)
+        if stock is None:
+            reason = reason or snapshot["errors"].get(ticker) or "Stock analysis is not ready yet."
             logger.warning("Projection API requested unavailable ticker %s: %s", ticker, reason)
-            return jsonify({"error": reason}), 404
+            status_code = 404 if (ticker or "").strip().upper() not in ALLOWED_TICKERS else 503
+            return jsonify({"error": reason}), status_code
 
         amount = _parse_float(request.args.get("amount"), SIM_DEFAULT_INITIAL_CAPITAL, 100.0, 100000000.0)
         custom_horizon = _parse_int(request.args.get("custom_horizon_days"), 0, 0, PROJECTION_MAX_HORIZON_DAYS)
@@ -1133,11 +1936,26 @@ def create_app() -> Flask:
         if not horizons:
             horizons = list(PROJECTION_DEFAULT_HORIZONS)
 
+        prediction_tracker = _build_eod_prediction_tracker(stock.analysis, sample_size=20, lookback=60)
+        learning_profile = _build_learning_profile(ticker, prediction_tracker)
+
         projections: list[dict[str, Any]] = []
         failures: list[dict[str, str]] = []
         for horizon in sorted(horizons):
             try:
-                projections.append(_projection_payload(stock.analysis, amount, horizon))
+                payload = _projection_payload(stock.analysis, amount, horizon)
+                raw_expected_return_pct = _bounded_return_pct(float(payload.get("expected_return_pct") or 0.0))
+                calibrated_expected_return_pct = _calibrate_projection_return(raw_expected_return_pct, learning_profile)
+                payload["raw_expected_return_pct"] = round(raw_expected_return_pct, 2)
+                payload["calibrated_expected_return_pct"] = round(calibrated_expected_return_pct, 2)
+                payload["expected_return_pct"] = round(calibrated_expected_return_pct, 2)
+                _apply_calibrated_projection_values(
+                    payload,
+                    amount,
+                    raw_expected_return_pct,
+                    calibrated_expected_return_pct,
+                )
+                projections.append(payload)
             except Exception as exc:
                 failures.append({"horizon_days": str(horizon), "reason": str(exc)})
 
@@ -1157,9 +1975,15 @@ def create_app() -> Flask:
                 "amount": round(amount, 2),
                 "projections": projections,
                 "failures": failures,
+                "learning_profile": {
+                    "quality_label": learning_profile.get("quality_label"),
+                    "quality_score_pct": learning_profile.get("quality_score_pct"),
+                    "calibration_ready": learning_profile.get("calibration_ready"),
+                    "ema_abs_error_pct": learning_profile.get("ema_abs_error_pct"),
+                },
                 "method_note": (
-                    "Projection uses adaptive historical drift (20-day + 120-day blend) with "
-                    "rolling backtest validation."
+                    "Projection uses adaptive historical drift (20-day + 120-day blend), "
+                    "rolling backtest validation, and model-bias calibration."
                 ),
             }
         )
@@ -1169,15 +1993,19 @@ def create_app() -> Flask:
         """Detailed stock page with interactive chart, explanation, and paper trading panel."""
         _ensure_state()
         snapshot = _snapshot_state()
+        reason: str | None = None
         stock = snapshot["stocks"].get(ticker)
         if stock is None:
-            reason = snapshot["errors"].get(ticker)
+            stock, reason = _resolve_stock_model(ticker, allow_on_demand=True)
+        if stock is None:
+            reason = reason or snapshot["errors"].get(ticker)
             if reason is None and snapshot["analysis_status"] == "running":
                 reason = "Analysis is processing in the background. Please refresh shortly."
             if reason is None:
                 abort(404)
             logger.warning("Stock page unavailable for %s: %s", ticker, reason)
-            return render_template("stock.html", ticker=ticker, stock=None, reason=reason, plotly_js="")
+            return render_template("stock.html", ticker=ticker, stock=None, reason=reason)
+        snapshot = _snapshot_state()
 
         if stock.interactive_chart_html is None:
             interactive_chart_html = _build_interactive_chart(stock.analysis, stock.simulation)
@@ -1192,7 +2020,10 @@ def create_app() -> Flask:
             ticker=ticker,
             stock=stock,
             reason=None,
-            plotly_js=get_plotlyjs(),
+            plotly_script_url=(
+                _cache_busted_chart_url(PLOTLY_VENDOR_RELATIVE_PATH)
+                or url_for("static", filename=PLOTLY_VENDOR_RELATIVE_PATH)
+            ),
             interactive_chart_html=stock.interactive_chart_html,
             chart_price_url=_cache_busted_chart_url(stock.chart_price_path),
             chart_rsi_url=_cache_busted_chart_url(stock.chart_rsi_path),
@@ -1222,8 +2053,10 @@ def create_app() -> Flask:
         snapshot = _snapshot_state()
         stock = snapshot["stocks"].get(ticker)
         if stock is None:
-            logger.warning("PDF export requested unavailable ticker %s", ticker)
-            abort(404)
+            stock, reason = _resolve_stock_model(ticker, allow_on_demand=True)
+            if stock is None:
+                logger.warning("PDF export requested unavailable ticker %s: %s", ticker, reason)
+                abort(404)
 
         if not stock.chart_price_path or not stock.chart_rsi_path:
             price_path, rsi_path = _ensure_static_charts(stock.analysis, stock.simulation)
@@ -1280,7 +2113,6 @@ def create_app() -> Flask:
 
     got_request_exception.connect(_log_unhandled_exception, app)
 
-    _start_scheduler()
     return app
 
 
