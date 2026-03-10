@@ -26,6 +26,17 @@ class StockViewModel:
     volatility_note: str
     simulation: PaperTradeResult
     analysis: StockAnalysis
+    reasoning_score: float | None = None
+    reasoning_label: str | None = None
+    reasoning_summary: list[str] | None = None
+    reasoning_flags: list[str] | None = None
+    last_data_date: str | None = None
+    days_since_update: int | None = None
+    scenario_summary: list[dict] | None = None
+    signal_reliability: list[dict] | None = None
+    risk_summary: dict | None = None
+    grid_results: list[dict] | None = None
+    data_quality: dict | None = None
     interactive_chart_html: str | None = None
     chart_price_path: str | None = None
     chart_rsi_path: str | None = None

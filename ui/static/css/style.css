@@ -75,6 +75,27 @@
     scrollbar-width: thin;
 }
 
+*:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.skip-link {
+    position: absolute;
+    left: -999px;
+    top: 8px;
+    background: #fff;
+    color: var(--text-main);
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    z-index: 1000;
+}
+
+.skip-link:focus {
+    left: 12px;
+}
+
 body {
     background:
         radial-gradient(circle at 10% 12%, rgba(15, 143, 241, 0.23), transparent 38%),
@@ -86,6 +107,14 @@ body {
     font-family: "Manrope", sans-serif;
     letter-spacing: 0.01em;
     position: relative;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+    }
 }
 
 body::before {
@@ -233,6 +262,74 @@ a:hover {
     border-bottom: 1px solid rgba(8, 40, 84, 0.1);
     background: transparent;
     padding: 1rem 1.2rem;
+}
+
+.table-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem 1rem;
+}
+
+details.card > summary {
+    list-style: none;
+    cursor: pointer;
+}
+
+details.card > summary::-webkit-details-marker {
+    display: none;
+}
+
+details.card[open] > summary {
+    border-bottom: 1px solid rgba(8, 40, 84, 0.1);
+}
+
+.chat-panel {
+    max-height: 520px;
+}
+
+.chat-history {
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 0.75rem;
+    background: rgba(255, 255, 255, 0.7);
+    max-height: 260px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.chat-message {
+    display: flex;
+}
+
+.chat-message.user {
+    justify-content: flex-end;
+}
+
+.chat-message.bot {
+    justify-content: flex-start;
+}
+
+.chat-bubble {
+    padding: 0.5rem 0.75rem;
+    border-radius: 12px;
+    max-width: 85%;
+    font-size: 0.85rem;
+    background: rgba(10, 123, 210, 0.12);
+    color: var(--text-main);
+}
+
+.chat-message.user .chat-bubble {
+    background: rgba(20, 200, 181, 0.15);
+}
+
+.chat-form {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
 }
 
 .hero-panel {

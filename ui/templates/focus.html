@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Focus View{% endblock %}
+
+{% block head_extra %}
+{% if stock is not none %}
+<script src="{{ plotly_script_url }}"></script>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-shell">
+    <section class="card p-4">
+        <h2 class="h5 mb-2">Focus Mode: {{ ticker }}</h2>
+        <p class="text-body-secondary">Distraction-free view for a single ticker.</p>
+        {% if stock is none %}
+            <p class="text-danger">Stock not available.</p>
+        {% else %}
+            <p><strong>Regime:</strong> {{ stock.regime }} | <strong>Confidence:</strong> {{ stock.confidence_label }}</p>
+            <div class="plotly-wrapper">{{ stock.interactive_chart_html | safe }}</div>
+            <hr>
+            <p><strong>Summary:</strong></p>
+            <ul>
+                {% for line in stock.reasoning_summary or [] %}
+                <li>{{ line }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

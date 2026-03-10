@@ -56,6 +56,20 @@
         </article>
     </section>
 
+    <section class="card p-3 p-lg-4 mb-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2 class="h6 mb-0">Alert Feed</h2>
+            <span class="badge rounded-pill bg-secondary-soft">Local Signals</span>
+        </div>
+        <ul class="small mb-0">
+            {% for stock in stocks[:5] %}
+            <li>{{ stock.ticker }} | Regime: {{ stock.regime }} | Volatility: {{ stock.volatility_label }} | Freshness: {{ stock.days_since_update }}d</li>
+            {% else %}
+            <li>No alerts available.</li>
+            {% endfor %}
+        </ul>
+    </section>
+
     <div class="row g-4 align-items-start">
         <div class="col-12 col-xl-8">
             <section class="card p-3 p-lg-4 mb-4 control-panel">
@@ -63,16 +77,16 @@
                     <h2 class="h6 mb-0">Filter & Search</h2>
                     <span class="text-body-secondary small">{{ displayed_count }} visible / {{ total_analyzed }} total</span>
                 </div>
-                <form id="dashboardFilterForm" method="get" action="{{ url_for('index') }}" class="row g-2 align-items-center">
+                <form id="dashboardFilterForm" method="get" action="{{ url_for('index') }}" class="row g-2 align-items-center" aria-label="Dashboard filters">
                     <div class="col-md-3">
-                        <select id="regimeSelect" name="regime" class="form-select form-select-sm">
+                        <select id="regimeSelect" name="regime" class="form-select form-select-sm" aria-label="Regime filter">
                             <option value="ALL" {% if regime_filter == 'ALL' %}selected{% endif %}>All Regimes</option>
                             <option value="LONG_TERM" {% if regime_filter == 'LONG_TERM' %}selected{% endif %}>Long-Term</option>
                             <option value="SHORT_TERM" {% if regime_filter == 'SHORT_TERM' %}selected{% endif %}>Short-Term</option>
                         </select>
                     </div>
                     <div class="col-md-3">
-                        <select id="sortSelect" name="sort" class="form-select form-select-sm">
+                        <select id="sortSelect" name="sort" class="form-select form-select-sm" aria-label="Sort stocks">
                             <option value="highest_return" {% if sort_by == 'highest_return' %}selected{% endif %}>Sort: Highest Return</option>
                             <option value="lowest_risk" {% if sort_by == 'lowest_risk' %}selected{% endif %}>Sort: Lowest Risk</option>
                             <option value="highest_confidence" {% if sort_by == 'highest_confidence' %}selected{% endif %}>Sort: Highest Confidence</option>
@@ -93,7 +107,8 @@
                     <span class="small text-body-secondary">Click a row to open full detail</span>
                 </div>
                 <div class="table-responsive">
-                    <table id="overviewTable" class="table table-hover mb-0">
+                    <table id="overviewTable" class="table table-hover mb-0" aria-describedby="overviewCaption" data-page-size="20">
+                        <caption id="overviewCaption" class="visually-hidden">Stock overview table</caption>
                         <thead>
                             <tr>
                                 <th>Ticker</th>
@@ -101,12 +116,13 @@
                                 <th class="text-center">Confidence</th>
                                 <th class="text-center">Volatility</th>
                                 <th class="text-end">Win Rate</th>
+                                <th class="text-end">Data Freshness</th>
                                 <th class="text-end">Hypothetical Return</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for stock in stocks %}
-                            <tr class="click-row" data-href="{{ url_for('stock_detail', ticker=stock.ticker) }}" data-ticker="{{ stock.ticker }}">
+                            <tr class="click-row" data-href="{{ url_for('stock_detail', ticker=stock.ticker) }}" data-ticker="{{ stock.ticker }}" role="link" tabindex="0" aria-label="Open {{ stock.ticker }} detail">
                                 <td><span class="font-monospace fw-bold">{{ stock.ticker }}</span></td>
                                 <td>
                                     <span class="badge rounded-pill {{ 'bg-success-soft' if stock.regime == 'LONG_TERM' else 'bg-danger-soft' }}">
@@ -122,29 +138,46 @@
                                     <span class="badge rounded-pill bg-secondary-soft">{{ stock.volatility_label }}</span>
                                 </td>
                                 <td class="text-end font-monospace small">{{ '%.1f'|format(stock.simulation.win_rate) }}%</td>
+                                <td class="text-end small">
+                                    {% if stock.days_since_update is not none %}
+                                        {{ stock.days_since_update }}d
+                                    {% else %}
+                                        N/A
+                                    {% endif %}
+                                </td>
                                 <td class="text-end font-monospace fw-bold {{ 'text-success' if stock.hypothetical_return_pct >= 0 else 'text-danger' }}">
                                     {{ '%+.2f'|format(stock.hypothetical_return_pct) }}%
                                 </td>
                             </tr>
                             {% else %}
                             <tr>
-                                <td colspan="6" class="text-center py-5">
+                                <td colspan="7" class="text-center py-5">
                                     <h4 class="mb-1">No stocks found</h4>
                                     <p class="text-body-secondary">{{ 'Analysis is processing...' if processing else 'No stocks match the selected filters.' }}</p>
                                 </td>
                             </tr>
                             {% endfor %}
                             <tr id="noSearchRows" style="display: none;">
-                                <td colspan="6" class="text-center py-5"><h4 class="mb-1">No stocks match your search.</h4></td>
+                                <td colspan="7" class="text-center py-5"><h4 class="mb-1">No stocks match your search.</h4></td>
                             </tr>
                         </tbody>
                     </table>
+                </div>
+                <div class="table-pagination">
+                    <button id="tablePrev" class="btn btn-sm btn-outline-secondary" type="button">Previous</button>
+                    <span id="tablePageStatus" class="small text-body-secondary">Page 1</span>
+                    <button id="tableNext" class="btn btn-sm btn-outline-secondary" type="button">Next</button>
                 </div>
             </section>
         </div>
 
         <div class="col-12 col-xl-4">
-            <section class="card p-3 p-lg-4 mb-4 pulse-card">
+            <details class="card mb-4 pulse-card">
+                <summary class="card-header d-flex justify-content-between align-items-center">
+                    <h2 class="h6 mb-0">Market Pulse</h2>
+                    <span class="small text-body-secondary">Expanded view</span>
+                </summary>
+                <div class="card-body p-3 p-lg-4">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <h2 class="h6 mb-0">Market Pulse</h2>
                     <span id="marketTrendBadge" class="badge rounded-pill bg-secondary-soft">Waiting</span>
@@ -164,20 +197,22 @@
                         <strong id="marketFlatCount">0</strong>
                     </div>
                 </div>
-            </section>
+                </div>
+            </details>
 
-            <section class="card mb-4 live-tracker" data-tickers="{{ live_tracker_tickers|join(',') }}" data-refresh-seconds="{{ live_refresh_seconds }}">
-                <div class="card-header d-flex justify-content-between align-items-center">
+            <details class="card mb-4 live-tracker" data-tickers="{{ live_tracker_tickers|join(',') }}" data-refresh-seconds="{{ live_refresh_seconds }}">
+                <summary class="card-header d-flex justify-content-between align-items-center">
                     <h2 class="h6 mb-0">Live Tracker</h2>
                     <span id="liveTrackerStatus" class="badge rounded-pill bg-secondary-soft">Loading...</span>
-                </div>
+                </summary>
                 <div class="table-responsive">
-                    <table class="table table-sm mb-0">
+                    <table class="table table-sm mb-0" aria-describedby="liveTrackerCaption">
+                        <caption id="liveTrackerCaption" class="visually-hidden">Live tracker quote table</caption>
                         <thead>
                             <tr>
-                                <th>Ticker</th>
-                                <th class="text-end">Price</th>
-                                <th class="text-end">Change</th>
+                                <th scope="col">Ticker</th>
+                                <th scope="col" class="text-end">Price</th>
+                                <th scope="col" class="text-end">Change</th>
                             </tr>
                         </thead>
                         <tbody id="liveQuotesBody">
@@ -188,19 +223,20 @@
                 <div class="px-3 py-2 border-top small text-body-secondary">
                     Last quote refresh: <span id="liveTrackerUpdated">--</span>
                 </div>
-            </section>
+            </details>
 
-            <section class="card">
-                <div class="card-header">
+            <details class="card">
+                <summary class="card-header">
                     <h2 class="h6 mb-0">52W Breakout Watch</h2>
-                </div>
+                </summary>
                 <div class="table-responsive">
-                    <table class="table table-sm mb-0">
+                    <table class="table table-sm mb-0" aria-describedby="breakoutCaption">
+                        <caption id="breakoutCaption" class="visually-hidden">52 week breakout watchlist</caption>
                         <thead>
                             <tr>
-                                <th>Ticker</th>
-                                <th>Status</th>
-                                <th class="text-end">Dist. To High</th>
+                                <th scope="col">Ticker</th>
+                                <th scope="col">Status</th>
+                                <th scope="col" class="text-end">Dist. To High</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -218,7 +254,73 @@
                         </tbody>
                     </table>
                 </div>
+            </details>
+        </div>
+        <div class="col-12 col-xl-4">
+            <section class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h2 class="h6 mb-0">Data Integrity</h2>
+                    <span class="badge rounded-pill bg-secondary-soft">Local</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th>Ticker</th>
+                                <th class="text-end">Stale</th>
+                                <th class="text-end">Gaps</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for stock in stocks[:8] %}
+                            {% set dq = stock.data_quality if stock.data_quality is not none else None %}
+                            <tr class="click-row" data-href="{{ url_for('stock_detail', ticker=stock.ticker) }}" data-ticker="{{ stock.ticker }}">
+                                <td><span class="font-monospace small">{{ stock.ticker }}</span></td>
+                                <td class="text-end small {{ 'text-danger' if dq and dq.stale else 'text-success' }}">
+                                    {{ 'Yes' if dq and dq.stale else 'No' }}
+                                </td>
+                                <td class="text-end small">{{ dq.gaps if dq else 'N/A' }}</td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="3" class="text-center small text-body-secondary py-3">No data quality stats yet.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <div class="px-3 py-2 border-top small text-body-secondary">
+                    Stale = more than 3 trading days old.
+                </div>
             </section>
+            <section class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h2 class="h6 mb-0">Top Reasoned Picks</h2>
+                    <span class="badge rounded-pill bg-secondary-soft">Explainable</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th>Ticker</th>
+                                <th class="text-end">Reasoning</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in ranked_watchlist %}
+                            <tr class="click-row" data-href="{{ url_for('stock_detail', ticker=item.ticker) }}" data-ticker="{{ item.ticker }}">
+                                <td><span class="font-monospace small">{{ item.ticker }}</span></td>
+                                <td class="text-end font-monospace small">{{ item.reasoning_score if item.reasoning_score is not none else 'N/A' }}</td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="2" class="text-center small text-body-secondary py-3">No ranked signals yet.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <div class="px-3 py-2 border-top small text-body-secondary">
+                    Ranking blends reasoning score, confidence, and hypothetical return.
+                </div>
+            </section>
+            {% include 'includes/chat_panel.html' %}
         </div>
     </div>
 
@@ -244,4 +346,5 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
 {% endblock %}

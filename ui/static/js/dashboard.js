@@ -2,6 +2,11 @@ document.addEventListener('DOMContentLoaded', function () {
     const searchInput = document.getElementById('tickerSearch');
     const tableBody = document.querySelector('#overviewTable tbody');
     const noSearchRows = document.getElementById('noSearchRows');
+    const tablePrev = document.getElementById('tablePrev');
+    const tableNext = document.getElementById('tableNext');
+    const tablePageStatus = document.getElementById('tablePageStatus');
+    let currentPage = 1;
+    let pageSize = 20;
     const liveTrackerSection = document.querySelector('.live-tracker');
     const liveQuotesBody = document.getElementById('liveQuotesBody');
     const liveTrackerStatus = document.getElementById('liveTrackerStatus');
@@ -67,6 +72,40 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (noSearchRows) {
             noSearchRows.style.display = visibleCount === 0 ? '' : 'none';
+        }
+
+        currentPage = 1;
+        applyPagination();
+    }
+
+    function applyPagination() {
+        if (!tableBody) {
+            return;
+        }
+        const rows = Array.from(tableBody.querySelectorAll('tr.click-row')).filter(function (row) {
+            return row.style.display !== 'none';
+        });
+        if (!rows.length) {
+            if (tablePageStatus) {
+                tablePageStatus.textContent = 'Page 0';
+            }
+            return;
+        }
+        const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+        currentPage = Math.min(currentPage, totalPages);
+        const start = (currentPage - 1) * pageSize;
+        const end = start + pageSize;
+        rows.forEach(function (row, idx) {
+            row.style.display = idx >= start && idx < end ? '' : 'none';
+        });
+        if (tablePageStatus) {
+            tablePageStatus.textContent = 'Page ' + currentPage + ' / ' + totalPages;
+        }
+        if (tablePrev) {
+            tablePrev.disabled = currentPage <= 1;
+        }
+        if (tableNext) {
+            tableNext.disabled = currentPage >= totalPages;
         }
     }
 
@@ -166,6 +205,9 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!liveTrackerSection || !liveQuotesBody) {
             return;
         }
+        if (liveTrackerSection.tagName === 'DETAILS' && !liveTrackerSection.open) {
+            return;
+        }
 
         const tickers = (liveTrackerSection.dataset.tickers || '').trim();
         if (!tickers) {
@@ -246,9 +288,43 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
+    document.body.addEventListener('keydown', function (event) {
+        const row = event.target.closest('.click-row');
+        if (!row || !row.dataset.href) {
+            return;
+        }
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            window.location = row.dataset.href;
+        }
+    });
+
     if (searchInput) {
         searchInput.addEventListener('input', applyClientFilters);
         applyClientFilters();
+    }
+
+    if (tableBody) {
+        const table = document.getElementById('overviewTable');
+        const sizeAttr = table ? Number(table.dataset.pageSize) : NaN;
+        if (!Number.isNaN(sizeAttr) && sizeAttr > 0) {
+            pageSize = sizeAttr;
+        }
+        applyPagination();
+    }
+
+    if (tablePrev) {
+        tablePrev.addEventListener('click', function () {
+            currentPage = Math.max(1, currentPage - 1);
+            applyPagination();
+        });
+    }
+
+    if (tableNext) {
+        tableNext.addEventListener('click', function () {
+            currentPage += 1;
+            applyPagination();
+        });
     }
 
     if (liveTrackerSection) {

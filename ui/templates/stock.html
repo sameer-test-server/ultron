@@ -38,6 +38,9 @@
                 {{ stock.regime }}
             </span>
              <a class="btn btn-sm btn-primary" href="{{ url_for('export_pdf', ticker=stock.ticker) }}"><i class="bi bi-file-earmark-pdf"></i> Export</a>
+             {% if stock.last_data_date %}
+             <div class="small text-body-secondary mt-2">Data as of {{ stock.last_data_date }} ({{ stock.days_since_update }}d ago)</div>
+             {% endif %}
         </div>
     </div>
 
@@ -53,7 +56,7 @@
                 </div>
                 <div class="card-body">
                     {% set chart_window = chart_window if chart_window is defined else {} %}
-                    <div class="plotly-wrapper" data-recent-start="{{ chart_window.recent_start }}" data-recent-end="{{ chart_window.recent_end }}" data-full-start="{{ chart_window.full_start }}" data-full-end="{{ chart_window.full_end }}">
+                    <div class="plotly-wrapper" data-recent-start="{{ chart_window.recent_start }}" data-recent-end="{{ chart_window.recent_end }}" data-full-start="{{ chart_window.full_start }}" data-full-end="{{ chart_window.full_end }}" aria-label="Interactive price and RSI chart">
                         {{ interactive_chart_html | safe }}
                     </div>
                 </div>
@@ -67,7 +70,7 @@
                     <ul class="list-group list-group-flush">
                         <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent px-0">
                             <span class="fw-bold small">Confidence</span>
-                            <div class="confidence-bar" title="{{stock.confidence_label}} ({{confidence_pct}}%)">
+                            <div class="confidence-bar" role="img" aria-label="Confidence {{ stock.confidence_label }} at {{ confidence_pct }} percent" title="{{stock.confidence_label}} ({{confidence_pct}}%)">
                                 <div class="confidence-bar-inner" style="width: {{confidence_pct}}%"></div>
                             </div>
                         </li>
@@ -78,6 +81,18 @@
                         <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent px-0">
                             <span class="fw-bold small">Volatility</span>
                             <span class="badge rounded-pill bg-secondary-soft">{{ stock.volatility_label }}</span>
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent px-0">
+                            <span class="fw-bold small">Reasoning Score</span>
+                            <span class="font-monospace fw-bold">
+                                {{ stock.reasoning_score if stock.reasoning_score is not none else 'N/A' }}
+                            </span>
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent px-0">
+                            <span class="fw-bold small">Reasoning Label</span>
+                            <span class="badge rounded-pill bg-secondary-soft">
+                                {{ stock.reasoning_label if stock.reasoning_label else 'N/A' }}
+                            </span>
                         </li>
                          <li class="list-group-item d-flex justify-content-between align-items-center bg-transparent px-0">
                             <span class="fw-bold small">52W Breakout</span>
@@ -94,6 +109,23 @@
                         <li class="mb-2"><strong class="me-2 small text-body-secondary text-uppercase">Momentum:</strong> <span class="small">{{ stock.momentum_note }}</span></li>
                         <li class="mb-0"><strong class="me-2 small text-body-secondary text-uppercase">Volatility:</strong> <span class="small">{{ stock.volatility_note }}</span></li>
                     </ul>
+                    {% if stock.reasoning_summary %}
+                    <hr>
+                    <ul class="list-unstyled small mb-0">
+                        {% for line in stock.reasoning_summary %}
+                        <li class="mb-2">{{ line }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                    {% if stock.reasoning_flags %}
+                    <hr>
+                    <p class="small fw-bold text-warning mb-2">Caution Flags</p>
+                    <ul class="list-unstyled small mb-0">
+                        {% for line in stock.reasoning_flags %}
+                        <li class="mb-2">{{ line }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -117,6 +149,140 @@
             </div>
         </div>
     </div>
+    <div class="mt-4">
+        <section class="card">
+            <div class="card-header"><h6 class="mb-0 fw-bold">Scenario Engine</h6></div>
+            <div class="card-body">
+                <p class="small text-body-secondary">Comparison of multiple strategies on historical data.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th>Strategy</th>
+                                <th class="text-end">Return %</th>
+                                <th class="text-end">Trades</th>
+                                <th class="text-end">Win Rate</th>
+                                <th class="text-end">Max DD</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in stock.scenario_summary or [] %}
+                            <tr>
+                                <td>{{ row.name }}</td>
+                                <td class="text-end">{{ '%+.2f'|format(row.total_return_pct) }}%</td>
+                                <td class="text-end">{{ row.trades_count }}</td>
+                                <td class="text-end">{{ '%.1f'|format(row.win_rate) }}%</td>
+                                <td class="text-end">{{ '%.2f'|format(row.max_drawdown_pct) }}%</td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="5" class="text-center small text-body-secondary py-3">Scenario data unavailable.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </div>
+    <div class="mt-4">
+        <section class="card">
+            <div class="card-header"><h6 class="mb-0 fw-bold">Signal Reliability Ledger</h6></div>
+            <div class="card-body">
+                <p class="small text-body-secondary">Historical hit rates over a 5-day horizon.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th>Signal</th>
+                                <th class="text-end">Occurrences</th>
+                                <th class="text-end">Hit Rate</th>
+                                <th class="text-end">Avg Return</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in stock.signal_reliability or [] %}
+                            <tr>
+                                <td>{{ row.name }}</td>
+                                <td class="text-end">{{ row.occurrences }}</td>
+                                <td class="text-end">{{ '%.1f'|format(row.hit_rate) }}%</td>
+                                <td class="text-end">{{ '%+.2f'|format(row.avg_return_pct) }}%</td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="4" class="text-center small text-body-secondary py-3">No reliability data.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </div>
+    <div class="mt-4">
+        <section class="card">
+            <div class="card-header"><h6 class="mb-0 fw-bold">Risk Suite</h6></div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <div class="small text-body-secondary">Max Drawdown</div>
+                        <div class="fw-bold">{{ stock.risk_summary.max_drawdown_pct if stock.risk_summary else 'N/A' }}%</div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="small text-body-secondary">Liquidity Score</div>
+                        <div class="fw-bold">{{ stock.risk_summary.liquidity_score if stock.risk_summary else 'N/A' }}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="small text-body-secondary">Tail Risk Events</div>
+                        <div class="fw-bold">{{ stock.risk_summary.tail_risk_events|length if stock.risk_summary else 0 }}</div>
+                    </div>
+                </div>
+                <hr>
+                <p class="small text-body-secondary mb-2">Recent tail risk days:</p>
+                <ul class="small mb-0">
+                    {% for evt in stock.risk_summary.tail_risk_events if stock.risk_summary %}
+                    <li>{{ evt.date }} ({{ evt.return_pct }}%)</li>
+                    {% else %}
+                    <li>No tail risk events detected.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </section>
+    </div>
+    <div class="mt-4">
+        <section class="card">
+            <div class="card-header"><h6 class="mb-0 fw-bold">Research Lab (Top Parameters)</h6></div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th>Position %</th>
+                                <th>Stop Loss %</th>
+                                <th>Take Profit %</th>
+                                <th class="text-end">Return %</th>
+                                <th class="text-end">Win Rate</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in stock.grid_results or [] %}
+                            <tr>
+                                <td>{{ '%.0f'|format(row.position_size_pct) }}</td>
+                                <td>{{ '%.1f'|format(row.stop_loss_pct) }}</td>
+                                <td>{{ '%.1f'|format(row.take_profit_pct) }}</td>
+                                <td class="text-end">{{ '%+.2f'|format(row.total_return_pct) }}%</td>
+                                <td class="text-end">{{ '%.1f'|format(row.win_rate) }}%</td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="5" class="text-center small text-body-secondary py-3">No grid results yet.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </div>
+    <div class="mt-4">
+        {% with default_ticker=stock.ticker %}
+            {% include 'includes/chat_panel.html' %}
+        {% endwith %}
+    </div>
     {% endif %}
 </div>
 {% endblock %}
@@ -125,4 +291,5 @@
 {% if stock is not none %}
 <script src="{{ url_for('static', filename='js/stock.js') }}"></script>
 {% endif %}
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
 {% endblock %}

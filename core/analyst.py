@@ -10,6 +10,11 @@ import pandas as pd
 from core.data_reader import read_stock_data
 from core.indicators import add_indicators
 from core.regime_detector import RegimeAssessment, detect_regime
+from core.reasoning_engine import ReasoningReport, build_reasoning_report
+from core.scenario_engine import ScenarioResult, run_scenarios
+from core.signal_reliability import SignalReliability, compute_signal_reliability
+from core.risk_suite import RiskSummary, compute_risk_summary
+from core.research_lab import GridResult, run_parameter_grid
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,11 @@ class StockAnalysis:
     scenarios: list[HypotheticalScenario]
     signals: list[SignalPoint]
     hypothetical_return_pct: float
+    reasoning: ReasoningReport | None = None
+    scenarios_summary: list[ScenarioResult] | None = None
+    signal_reliability: list[SignalReliability] | None = None
+    risk_summary: RiskSummary | None = None
+    grid_results: list[GridResult] | None = None
 
 
 class StockAnalyst:
@@ -175,8 +185,14 @@ class StockAnalyst:
         regime = detect_regime(data)
         insights = self._generate_insights(data, regime)
 
+        reasoning = build_reasoning_report(data, regime.regime)
+
         signals = self._build_signals(data)
         scenarios = self._build_scenarios(signals)
+        scenario_summary = run_scenarios(data)
+        reliability = compute_signal_reliability(data)
+        risk_summary = compute_risk_summary(data)
+        grid_results = run_parameter_grid(self._build_stock_analysis_proxy(data, signals, regime, insights))
 
         if scenarios:
             avg_return = sum(item.return_pct for item in scenarios) / len(scenarios)
@@ -191,4 +207,22 @@ class StockAnalyst:
             scenarios=scenarios,
             signals=signals,
             hypothetical_return_pct=avg_return,
+            reasoning=reasoning,
+            scenarios_summary=scenario_summary,
+            signal_reliability=reliability,
+            risk_summary=risk_summary,
+            grid_results=grid_results,
+        )
+
+    @staticmethod
+    def _build_stock_analysis_proxy(data: pd.DataFrame, signals: list[SignalPoint], regime: RegimeAssessment, insights: list[str]) -> "StockAnalysis":
+        """Build minimal StockAnalysis proxy for grid runner."""
+        return StockAnalysis(
+            ticker="",
+            data=data,
+            regime=regime,
+            insights=insights,
+            scenarios=[],
+            signals=signals,
+            hypothetical_return_pct=0.0,
         )

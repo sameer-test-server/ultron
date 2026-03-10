@@ -1,0 +1,20 @@
+<section class="card chat-panel" data-default-ticker="{{ default_ticker or '' }}">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h2 class="h6 mb-0">Ultron Chat</h2>
+        <span class="badge rounded-pill bg-secondary-soft">Local Only</span>
+    </div>
+    <div class="card-body">
+        <div id="chatHistory" class="chat-history">
+            <div class="chat-message bot">
+                <div class="chat-bubble">
+                    Ask me about a ticker. Example: “Explain RELIANCE.NS” or “Summarize risks for TCS.NS”.
+                </div>
+            </div>
+        </div>
+        <form id="chatForm" class="chat-form">
+            <input id="chatInput" type="text" class="form-control form-control-sm" placeholder="Ask Ultron..." autocomplete="off" />
+            <button class="btn btn-sm btn-primary" type="submit">Send</button>
+        </form>
+        <p class="small text-body-secondary mt-2 mb-0">Ultron replies are based only on local historical data. LLM runs locally via Ollama if available.</p>
+    </div>
+</section>

@@ -4,15 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Ultron Analyst{% endblock %}</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fonts/fonts.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block head_extra %}{% endblock %}
 </head>
 <body class="d-flex flex-column min-vh-100">
+    <a class="skip-link" href="#mainContent">Skip to main content</a>
     <header class="navbar navbar-expand-lg sticky-top">
         <nav class="container-fluid" aria-label="Main navigation">
             <a class="navbar-brand p-0 me-0 me-lg-2" href="{{ url_for('index') }}" aria-label="Ultron">
@@ -21,6 +20,7 @@
             <div class="top-links ms-3">
                 <a class="nav-chip {% if request.endpoint == 'index' %}is-active{% endif %}" href="{{ url_for('index') }}">Dashboard</a>
                 <a class="nav-chip {% if request.endpoint == 'ultron_calculator' %}is-active{% endif %}" href="{{ url_for('ultron_calculator') }}">Ultron Calculator</a>
+                <a class="nav-chip {% if request.endpoint == 'watchlist' %}is-active{% endif %}" href="{{ url_for('watchlist') }}">Watchlist</a>
             </div>
             <div class="ms-auto">
                 <span class="status-pill me-2">Local Engine</span>
@@ -29,7 +29,7 @@
         </nav>
     </header>
 
-    <main class="container-fluid flex-grow-1 my-4 main-container">
+    <main id="mainContent" class="container-fluid flex-grow-1 my-4 main-container" tabindex="-1">
         {% block content %}{% endblock %}
     </main>
 
@@ -37,7 +37,7 @@
         <p class="text-body-secondary small mb-0">Ultron is a local analysis system. This is not a trading platform.</p>
     </footer>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+    <script src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
     <script>
         (function () {
             const clockEl = document.getElementById('liveClock');

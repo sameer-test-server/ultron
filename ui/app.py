@@ -11,6 +11,9 @@ import logging
 import math
 import os
 from pathlib import Path
+import re
+import urllib.request
+import urllib.error
 import sys
 import tempfile
 import threading
@@ -26,7 +29,10 @@ import matplotlib
 matplotlib.use("Agg")
 
 import pandas as pd
-import yfinance as yf
+try:
+    import yfinance as yf
+except Exception:  # pragma: no cover - optional dependency for live quotes
+    yf = None
 from flask import Flask, abort, got_request_exception, jsonify, render_template, request, send_file, url_for
 from plotly.offline import get_plotlyjs
 
@@ -40,6 +46,7 @@ from config.nifty50 import NIFTY50_TICKERS
 from config.settings import BASE_DIR
 from core.analyst import StockAnalysis, StockAnalyst
 from core.paper_trader import simulate_paper_trades
+from core.data_quality import evaluate_data_quality
 from ui.api import parse_float, parse_int, projection_payload, serialize_simulation
 from ui.charts import (
     build_interactive_chart,
@@ -49,6 +56,7 @@ from ui.charts import (
 )
 from ui.models import StockViewModel
 from ui.utils.pdf_exporter import PDF_DIR, build_stock_pdf
+from ui.watchlist_store import load_watchlist, save_watchlist
 
 
 BASE_PATH = Path(BASE_DIR)
@@ -88,6 +96,11 @@ MODEL_LEARNING_ALPHA = 0.35
 MODEL_MIN_SAMPLES = 25
 CALIBRATED_RETURN_MIN_PCT = -99.0
 CALIBRATED_RETURN_MAX_PCT = 250.0
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "mistral")
+OLLAMA_TIMEOUT_SECONDS = float(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "20"))
+OFFLINE_MODE = os.environ.get("ULTRON_OFFLINE_MODE", "false").strip().lower() in {"1", "true", "yes"}
+OLLAMA_STATUS_TTL_SECONDS = 30
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 logging.getLogger("curl_cffi").setLevel(logging.CRITICAL)
@@ -259,10 +272,14 @@ def create_app() -> Flask:
         "analysis_started_at": None,
         "analysis_finished_at": None,
         "last_refresh_check_at": None,
+        "ollama_status": None,
+        "ollama_status_checked_at": None,
     }
 
     def _safe_yf_download(*args: Any, **kwargs: Any) -> pd.DataFrame:
         """Run yfinance download with noisy stderr/stdout suppressed."""
+        if yf is None:
+            return pd.DataFrame()
         try:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 result = yf.download(*args, **kwargs)
@@ -397,6 +414,226 @@ def create_app() -> Flask:
 
         return trend_note, momentum_note, volatility_note
 
+    def _extract_ticker_from_message(message: str, available: set[str]) -> str | None:
+        """Extract a known ticker symbol from user chat message."""
+        if not message:
+            return None
+        tokens = re.findall(r"[A-Z]{2,10}(?:\\.NS)?", message.upper())
+        for token in tokens:
+            if token in available:
+                return token
+            if not token.endswith(".NS") and (token + ".NS") in available:
+                return token + ".NS"
+        return None
+
+    def _ranked_watchlist(items: list[StockViewModel], limit: int = 5) -> list[StockViewModel]:
+        """Return a ranked list based on reasoning score, confidence, and return."""
+        return sorted(
+            items,
+            key=lambda item: (
+                (item.reasoning_score or 0.0) * 0.6
+                + (item.confidence or 0.0) * 40.0
+                + (item.hypothetical_return_pct * 0.2)
+            ),
+            reverse=True,
+        )[:limit]
+
+    def _build_chat_response(message: str, ticker: str | None, snapshot: dict[str, Any]) -> str:
+        """Create a local, explainable chat response using Ultron analysis data."""
+        msg = (message or "").strip()
+        if not msg:
+            return "Please enter a question, like: 'Explain RELIANCE.NS' or 'Summarize risks for TCS.NS'."
+
+        system_needs = _build_system_needs(snapshot)
+        if system_needs and any(word in msg.lower() for word in ("need", "requirements", "setup", "status")):
+            return "Ultron needs:\n- " + "\n- ".join(system_needs)
+
+        all_stocks: dict[str, StockViewModel] = snapshot.get("stocks", {})
+        if not all_stocks:
+            return "No analyzed stocks are available yet. Please run analysis first."
+
+        available = set(all_stocks.keys())
+        ticker = ticker if ticker in available else None
+
+        if any(word in msg.lower() for word in ("hi", "hello", "hey")):
+            return (
+                "Hello. I can analyze any NIFTY50 ticker using local data. "
+                "Try: 'Explain RELIANCE.NS' or 'Summarize risks for TCS.NS'."
+            )
+
+        if "need" in msg.lower() or "requirements" in msg.lower():
+            return (
+                "Ultron needs:\n"
+                "- Local CSV data in data/raw/ (run the data loader first)\n"
+                "- Python 3.10+ with requirements installed\n"
+                "- Optional: Ollama running locally for full LLM chat\n"
+                "I remain read-only and do not place trades."
+            )
+
+        if any(word in msg.lower() for word in ("top", "rank", "best")) and "pick" in msg.lower():
+            picks = _ranked_watchlist(list(all_stocks.values()), limit=5)
+            lines = ["Top reasoned picks right now:"]
+            for item in picks:
+                lines.append(f"- {item.ticker}: score {item.reasoning_score or 'N/A'}, regime {item.regime}")
+            return "\n".join(lines)
+
+        if ticker is None:
+            return "Tell me which ticker to analyze, for example: 'Explain RELIANCE.NS'."
+
+        stock = all_stocks[ticker]
+        last_close = None
+        try:
+            last_close = float(stock.analysis.data["Close"].iloc[-1])
+        except Exception:
+            last_close = None
+
+        wants_risk = "risk" in msg.lower()
+        wants_regime = "regime" in msg.lower()
+        wants_summary = any(word in msg.lower() for word in ("summary", "explain", "why", "analysis"))
+        wants_momentum = "momentum" in msg.lower()
+        wants_vol = "volatility" in msg.lower()
+
+        response_lines = [
+            f"{ticker} snapshot:",
+            f"- Regime: {stock.regime} (confidence {stock.confidence_label}, {stock.confidence:.2f})",
+            f"- Reasoning: {stock.reasoning_label or 'N/A'} score {stock.reasoning_score if stock.reasoning_score is not None else 'N/A'}",
+            f"- Volatility: {stock.volatility_label} ({stock.volatility_value * 100:.1f}% annualized)",
+        ]
+        if last_close is not None:
+            response_lines.append(f"- Last close: ₹{last_close:.2f}")
+
+        if wants_regime:
+            response_lines.append("Regime explanation: " + stock.explanation)
+
+        if wants_momentum:
+            response_lines.append("Momentum note: " + stock.momentum_note)
+
+        if wants_vol:
+            response_lines.append("Volatility note: " + stock.volatility_note)
+
+        if wants_risk and stock.reasoning_flags:
+            response_lines.append("Caution flags:")
+            for flag in stock.reasoning_flags:
+                response_lines.append(f"- {flag}")
+
+        if wants_summary or not any([wants_risk, wants_regime, wants_momentum, wants_vol]):
+            response_lines.append("Summary:")
+            for line in (stock.reasoning_summary or stock.insights or []):
+                response_lines.append(f"- {line}")
+
+        response_lines.append("Note: This is a read-only, historical analysis. No real trades are placed.")
+
+        return "\n".join(response_lines)
+
+    def _ollama_chat(prompt: str, context: str) -> str | None:
+        """Call local Ollama for an LLM reply. Returns None on failure."""
+        payload = {
+            "model": OLLAMA_MODEL,
+            "stream": False,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are Ultron, a local-only market analyst. "
+                        "You must never give buy/sell orders or facilitate real trades. "
+                        "You must only explain observations from the provided data context. "
+                        "If the user asks for real-time data, say you are offline."
+                    ),
+                },
+                {"role": "system", "content": f"DATA CONTEXT:\n{context}"},
+                {"role": "user", "content": prompt},
+            ],
+        }
+
+        try:
+            req = urllib.request.Request(
+                f"{OLLAMA_URL}/api/chat",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT_SECONDS) as resp:
+                raw = resp.read()
+            parsed = json.loads(raw.decode("utf-8"))
+        except Exception:
+            return None
+
+        message = parsed.get("message", {})
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        return None
+
+    def _check_ollama_status() -> bool:
+        """Cache Ollama availability to avoid repeated slow checks."""
+        now = datetime.now()
+        with state_lock:
+            last_checked = state.get("ollama_status_checked_at")
+            cached = state.get("ollama_status")
+        if isinstance(last_checked, datetime) and cached is not None:
+            age = (now - last_checked).total_seconds()
+            if age < OLLAMA_STATUS_TTL_SECONDS:
+                return bool(cached)
+
+        ok = False
+        try:
+            req = urllib.request.Request(f"{OLLAMA_URL}/api/tags", method="GET")
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                if resp.status == 200:
+                    ok = True
+        except Exception:
+            ok = False
+        with state_lock:
+            state["ollama_status"] = ok
+            state["ollama_status_checked_at"] = now
+        return ok
+
+    def _build_system_needs(snapshot: dict[str, Any]) -> list[str]:
+        """Detect missing requirements and return helpful prompts."""
+        needs: list[str] = []
+        if not snapshot.get("stocks"):
+            needs.append("No analyzed stocks found. Run data update and analysis first.")
+        if OFFLINE_MODE:
+            needs.append("Offline mode is enabled; live quotes are disabled.")
+        if not _check_ollama_status():
+            needs.append("Ollama is not reachable. Start Ollama to enable full LLM chat.")
+        return needs
+
+    def _build_llm_context(ticker: str | None, snapshot: dict[str, Any]) -> str:
+        """Build compact context for LLM responses."""
+        all_stocks: dict[str, StockViewModel] = snapshot.get("stocks", {})
+        if not all_stocks:
+            return "No analyzed stocks are available."
+
+        if ticker and ticker in all_stocks:
+            stock = all_stocks[ticker]
+            last_close = None
+            try:
+                last_close = float(stock.analysis.data["Close"].iloc[-1])
+            except Exception:
+                last_close = None
+            lines = [
+                f"Ticker: {stock.ticker}",
+                f"Regime: {stock.regime} (confidence {stock.confidence_label}, {stock.confidence:.2f})",
+                f"Reasoning: {stock.reasoning_label} score {stock.reasoning_score}",
+                f"Volatility: {stock.volatility_label} ({stock.volatility_value * 100:.1f}% annualized)",
+                f"Last close: {last_close if last_close is not None else 'N/A'}",
+                f"Insights: {' | '.join(stock.insights)}",
+                f"Reasoning summary: {' | '.join(stock.reasoning_summary or [])}",
+            ]
+            if stock.reasoning_flags:
+                lines.append(f"Caution flags: {' | '.join(stock.reasoning_flags)}")
+            return "\n".join(lines)
+
+        ranked = _ranked_watchlist(list(all_stocks.values()), limit=5)
+        lines = [
+            "Ultron needs local CSV data under data/raw/, Python 3.10+, and optional Ollama for LLM chat.",
+            "Top reasoned picks:",
+        ]
+        for item in ranked:
+            lines.append(f"{item.ticker}: score {item.reasoning_score}, regime {item.regime}")
+        return "\n".join(lines)
+
     def _build_nse_quote_snapshot(analysis: StockAnalysis) -> dict[str, Any]:
         """Build NSE-style quote snapshot from local OHLCV history."""
         data = analysis.data.copy()
@@ -472,6 +709,18 @@ def create_app() -> Flask:
             "distance_from_52w_low_pct": round(distance_from_52w_low, 2),
             "position_note": position_note,
         }
+
+    def _data_freshness(analysis: StockAnalysis) -> tuple[str | None, int | None]:
+        """Return latest data date and days since update."""
+        try:
+            dates = pd.to_datetime(analysis.data["Date"], errors="coerce").dropna()
+            if dates.empty:
+                return None, None
+            last_date = dates.iloc[-1].date()
+            days_old = (datetime.now().date() - last_date).days
+            return last_date.isoformat(), max(days_old, 0)
+        except Exception:
+            return None, None
 
     def _window_return_pct(analysis: StockAnalysis, window_days: int = 20) -> float | None:
         """Compute trailing window return from close prices."""
@@ -1079,6 +1328,8 @@ def create_app() -> Flask:
             vol_level = volatility_label(vol_value)
             trend_note, momentum_note, vol_note = _build_notes(analysis, vol_level, vol_value)
 
+            last_date, days_old = _data_freshness(analysis)
+            dq = evaluate_data_quality(ticker, analysis.data)
             stock_model = StockViewModel(
                 ticker=ticker,
                 regime=analysis.regime.regime,
@@ -1094,6 +1345,17 @@ def create_app() -> Flask:
                 volatility_note=vol_note,
                 simulation=simulation,
                 analysis=analysis,
+                reasoning_score=analysis.reasoning.score if analysis.reasoning else None,
+                reasoning_label=analysis.reasoning.label if analysis.reasoning else None,
+                reasoning_summary=analysis.reasoning.summary if analysis.reasoning else None,
+                reasoning_flags=analysis.reasoning.flags if analysis.reasoning else None,
+                scenario_summary=[s.__dict__ for s in (analysis.scenarios_summary or [])],
+                signal_reliability=[s.__dict__ for s in (analysis.signal_reliability or [])],
+                risk_summary=analysis.risk_summary.__dict__ if analysis.risk_summary else None,
+                grid_results=[g.__dict__ for g in (analysis.grid_results or [])],
+                data_quality=dq.__dict__ if dq else None,
+                last_data_date=last_date,
+                days_since_update=days_old,
                 data_fingerprint=_data_fingerprint(analysis.data),
             )
             return ticker, stock_model, None
@@ -1482,6 +1744,8 @@ def create_app() -> Flask:
 
     def _fetch_live_quotes(tickers: list[str]) -> list[dict[str, Any]]:
         """Fetch live-ish quotes from yfinance for dashboard tracking."""
+        if OFFLINE_MODE:
+            return []
         if not tickers:
             return []
 
@@ -1627,6 +1891,7 @@ def create_app() -> Flask:
         analysis_message = snapshot["analysis_message"]
         processing = analysis_status == "running"
         breakout_watchlist = _build_dashboard_breakout_watchlist(stocks_map, limit=8)
+        ranked_watchlist = _ranked_watchlist(all_stocks, limit=10)
 
         return render_template(
             "index.html",
@@ -1648,6 +1913,7 @@ def create_app() -> Flask:
             processing=processing,
             analysis_poll_seconds=ANALYSIS_STATUS_POLL_SECONDS,
             breakout_watchlist=breakout_watchlist,
+            ranked_watchlist=ranked_watchlist,
         )
 
     @app.route("/calculator")
@@ -1755,6 +2021,40 @@ def create_app() -> Flask:
             analysis_message=snapshot["analysis_message"],
         )
 
+    @app.route("/watchlist", methods=["GET", "POST"])
+    def watchlist() -> str:
+        _ensure_state()
+        snapshot = _snapshot_state()
+        watchlist = load_watchlist()
+
+        if request.method == "POST":
+            ticker = (request.form.get("ticker") or "").strip().upper()
+            note = (request.form.get("note") or "").strip()
+            if ticker:
+                watchlist.append({"ticker": ticker, "note": note})
+                save_watchlist(watchlist)
+
+        return render_template("watchlist.html", watchlist=watchlist, stocks=snapshot["stocks"])
+
+    @app.route("/focus/<ticker>")
+    def focus(ticker: str) -> str:
+        _ensure_state()
+        snapshot = _snapshot_state()
+        stock = snapshot["stocks"].get(ticker)
+        if stock is None:
+            stock, _ = _resolve_stock_model(ticker, allow_on_demand=True)
+        if stock is not None and stock.interactive_chart_html is None:
+            stock.interactive_chart_html = _build_interactive_chart(stock.analysis, stock.simulation)
+        return render_template(
+            "focus.html",
+            ticker=ticker,
+            stock=stock,
+            plotly_script_url=(
+                _cache_busted_chart_url(PLOTLY_VENDOR_RELATIVE_PATH)
+                or url_for("static", filename=PLOTLY_VENDOR_RELATIVE_PATH)
+            ),
+        )
+
     @app.route("/api/dashboard")
     def dashboard_api():
         """Headless API endpoint for the dashboard."""
@@ -1841,6 +2141,28 @@ def create_app() -> Flask:
                 "updated_at": fetched_at.strftime("%Y-%m-%d %H:%M:%S"),
             }
         )
+
+    @app.route("/api/chat", methods=["POST"])
+    def chat_api():
+        """Local chat endpoint using Ultron's explainable analysis data."""
+        _ensure_state()
+        snapshot = _snapshot_state()
+        payload = request.get_json(silent=True) or {}
+        message = str(payload.get("message", "") or "").strip()
+        default_ticker = str(payload.get("default_ticker", "") or "").strip().upper()
+        history = payload.get("history") if isinstance(payload.get("history"), list) else []
+        available = set(snapshot.get("stocks", {}).keys())
+        ticker = _extract_ticker_from_message(message, available)
+        if ticker is None and default_ticker in available:
+            ticker = default_ticker
+        context = _build_llm_context(ticker, snapshot)
+        if history:
+            context = context + "\nChat history:\n" + "\n".join(history[-6:])
+        llm_reply = _ollama_chat(message, context) if _check_ollama_status() else None
+        if llm_reply is None:
+            reply = _build_chat_response(message, ticker, snapshot)
+            return jsonify({"reply": reply, "ticker": ticker, "mode": "fallback", "needs": _build_system_needs(snapshot)})
+        return jsonify({"reply": llm_reply, "ticker": ticker, "mode": "ollama", "needs": _build_system_needs(snapshot)})
 
     @app.route("/api/simulation/<ticker>")
     def simulation_api(ticker: str):
