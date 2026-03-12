@@ -9,6 +9,10 @@ It ingests daily OHLCV data, computes indicators, classifies regimes, runs multi
    Local‑Only Research | Explainable Intelligence | Safe Simulation
 ```
 
+![Local Only](https://img.shields.io/badge/Local--Only-Yes-brightgreen)
+![No Real Trading](https://img.shields.io/badge/Real%20Trading-None-red)
+![License](https://img.shields.io/badge/License-Private-lightgrey)
+
 ---
 
 ## Why Ultron
@@ -29,6 +33,19 @@ Raw OHLCV → Indicators → Regime → Reasoning → Scenarios → Paper Trades
 
 ---
 
+## At a Glance
+
+| Area | What Ultron Delivers |
+| --- | --- |
+| Data | Multi-source fallback, local caching, strict validation |
+| Signals | SMA/EMA/RSI + volatility + explainable reasoning |
+| Regimes | LONG_TERM vs SHORT_TERM with confidence |
+| Research | Scenario engine + parameter grid lab |
+| Risk | Drawdown, tail risk events, liquidity score |
+| UI | Dashboard, focus mode, watchlist, chat, PDFs |
+
+---
+
 ## What You’ll See (UI)
 
 - **Dashboard**: Ranked tickers with regime, confidence, and hypothetical returns
@@ -39,6 +56,26 @@ Raw OHLCV → Indicators → Regime → Reasoning → Scenarios → Paper Trades
 
 ```
 Signals are evidence-backed. Results are reproducible. Everything is local.
+```
+
+---
+
+## Architecture (Local Only)
+
+```
+          data/raw/*.csv
+                 │
+                 ▼
+          core/data_reader
+                 │
+                 ▼
+   indicators → regime → reasoning
+                 │
+                 ▼
+     scenarios / paper trading
+                 │
+                 ▼
+        UI + PDF exports
 ```
 
 ---
@@ -137,6 +174,24 @@ Outputs in `reports/daily/`.
 - **No broker APIs**
 - **Read-only analysis + simulation**
 - **Local-only execution**
+
+---
+
+## Screenshots (Optional)
+
+Add your own screenshots to make the README even more visual:
+
+- `reports/screenshots/dashboard.png`
+- `reports/screenshots/stock_detail.png`
+- `reports/screenshots/focus_mode.png`
+
+Then embed them here:
+
+```markdown
+![Dashboard](reports/screenshots/dashboard.png)
+![Stock Detail](reports/screenshots/stock_detail.png)
+![Focus Mode](reports/screenshots/focus_mode.png)
+```
 
 ---
 
