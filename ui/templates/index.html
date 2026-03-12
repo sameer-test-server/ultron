@@ -1,14 +1,20 @@
 {% extends "base.html" %}
 
 {% block title %}Ultron Dashboard{% endblock %}
+{% block page_title %}Command Center{% endblock %}
 
 {% block content %}
 <div class="dashboard-shell">
-    <section class="card hero-panel hero-panel--dashboard mb-4">
+    <section class="card hero-panel hero-panel--dashboard mb-4 hero-glow">
         <div class="hero-left">
             <p class="hero-kicker mb-2">AUTONOMOUS MARKET INTELLIGENCE</p>
             <h1 class="h2 mb-2">Ultron NIFTY 50 Command Center</h1>
-            <p class="text-body-secondary mb-0">Signal-driven watchlist, live quote tracker, and paper-trade scoring in one view.</p>
+            <p class="text-body-secondary mb-3">Signal-driven watchlist, live quote tracker, and paper-trade scoring in one view.</p>
+            <div class="hero-actions d-flex flex-wrap gap-2">
+                <a class="btn btn-sm btn-primary" href="#overviewTable">View Watchlist</a>
+                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('watchlist') }}">Open Watchlist</a>
+                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ultron_calculator') }}">Ultron Calculator</a>
+            </div>
         </div>
         <div class="hero-right">
             <div class="hero-meta-item">
@@ -22,6 +28,10 @@
             <div class="hero-meta-item">
                 <span class="meta-label">Sort Mode</span>
                 <span class="meta-value">{{ sort_by.replace('_', ' ')|title }}</span>
+            </div>
+            <div class="hero-meta-item">
+                <span class="meta-label">Signal Status</span>
+                <span class="meta-value">{{ analysis_status|upper }}</span>
             </div>
         </div>
     </section>
@@ -56,19 +66,46 @@
         </article>
     </section>
 
-    <section class="card p-3 p-lg-4 mb-4">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <h2 class="h6 mb-0">Alert Feed</h2>
-            <span class="badge rounded-pill bg-secondary-soft">Local Signals</span>
+    <div class="row g-4 mb-4">
+        <div class="col-12 col-xl-7">
+            <section class="card p-3 p-lg-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h6 mb-0">Alert Feed</h2>
+                    <span class="badge rounded-pill bg-secondary-soft">Local Signals</span>
+                </div>
+                <ul class="alert-feed mb-0">
+                    {% for stock in stocks[:5] %}
+                    <li>
+                        <span class="alert-feed__ticker">{{ stock.ticker }}</span>
+                        <span class="badge rounded-pill {{ 'bg-success-soft' if stock.regime == 'LONG_TERM' else 'bg-danger-soft' }}">{{ stock.regime }}</span>
+                        <span class="alert-feed__meta">Volatility {{ stock.volatility_label }} · Freshness {{ stock.days_since_update }}d</span>
+                    </li>
+                    {% else %}
+                    <li>No alerts available.</li>
+                    {% endfor %}
+                </ul>
+            </section>
         </div>
-        <ul class="small mb-0">
-            {% for stock in stocks[:5] %}
-            <li>{{ stock.ticker }} | Regime: {{ stock.regime }} | Volatility: {{ stock.volatility_label }} | Freshness: {{ stock.days_since_update }}d</li>
-            {% else %}
-            <li>No alerts available.</li>
-            {% endfor %}
-        </ul>
-    </section>
+        <div class="col-12 col-xl-5">
+            <section class="card p-3 p-lg-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h6 mb-0">Today’s Focus</h2>
+                    <span class="badge rounded-pill bg-secondary-soft">Top Signals</span>
+                </div>
+                <div class="focus-grid">
+                    {% for stock in stocks[:3] %}
+                    <a class="focus-card" href="{{ url_for('stock_detail', ticker=stock.ticker) }}">
+                        <div class="focus-card__title">{{ stock.ticker }}</div>
+                        <div class="focus-card__meta">{{ stock.regime }} · {{ stock.confidence_label }}</div>
+                        <div class="focus-card__value">{{ '%.2f'|format(stock.hypothetical_return_pct) }}%</div>
+                    </a>
+                    {% else %}
+                    <div class="text-body-secondary small">No focus items available.</div>
+                    {% endfor %}
+                </div>
+            </section>
+        </div>
+    </div>
 
     <div class="row g-4 align-items-start">
         <div class="col-12 col-xl-8">

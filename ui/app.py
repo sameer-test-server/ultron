@@ -442,43 +442,62 @@ def create_app() -> Flask:
         """Create a local, explainable chat response using Ultron analysis data."""
         msg = (message or "").strip()
         if not msg:
-            return "Please enter a question, like: 'Explain RELIANCE.NS' or 'Summarize risks for TCS.NS'."
+            return "Ask me anything. For stock analysis, try: 'Explain RELIANCE.NS' or 'Summarize risks for TCS.NS'."
 
         system_needs = _build_system_needs(snapshot)
         if system_needs and any(word in msg.lower() for word in ("need", "requirements", "setup", "status")):
             return "Ultron needs:\n- " + "\n- ".join(system_needs)
 
         all_stocks: dict[str, StockViewModel] = snapshot.get("stocks", {})
-        if not all_stocks:
-            return "No analyzed stocks are available yet. Please run analysis first."
 
         available = set(all_stocks.keys())
         ticker = ticker if ticker in available else None
 
         if any(word in msg.lower() for word in ("hi", "hello", "hey")):
             return (
-                "Hello. I can analyze any NIFTY50 ticker using local data. "
-                "Try: 'Explain RELIANCE.NS' or 'Summarize risks for TCS.NS'."
+                "Hello. Ask me anything. For stock analysis, provide a ticker "
+                "like 'Explain RELIANCE.NS'."
             )
 
         if "need" in msg.lower() or "requirements" in msg.lower():
             return (
-                "Ultron needs:\n"
+                "Here’s what I need to run well:\n"
                 "- Local CSV data in data/raw/ (run the data loader first)\n"
-                "- Python 3.10+ with requirements installed\n"
-                "- Optional: Ollama running locally for full LLM chat\n"
-                "I remain read-only and do not place trades."
+                "- Python 3.10+ with the required packages installed\n"
+                "- Optional: Ollama running locally for full chat responses\n"
+                "I’m read-only and never place real trades."
             )
 
         if any(word in msg.lower() for word in ("top", "rank", "best")) and "pick" in msg.lower():
+            if not all_stocks:
+                return (
+                    "I can rank tickers once analysis data is available. "
+                    "Run the data update + analysis, then ask for top picks."
+                )
             picks = _ranked_watchlist(list(all_stocks.values()), limit=5)
             lines = ["Top reasoned picks right now:"]
             for item in picks:
                 lines.append(f"- {item.ticker}: score {item.reasoning_score or 'N/A'}, regime {item.regime}")
             return "\n".join(lines)
 
+        if any(word in msg.lower() for word in ("who are you", "what are you", "what can you do")):
+            return (
+                "I’m Ultron, a local-only analyst. I can explain indicators, regimes, risks, "
+                "and simulate historical scenarios. I can also answer general questions. "
+                "For stock-specific analysis, provide a ticker like 'Explain RELIANCE.NS'."
+            )
+
+        if not all_stocks and any(word in msg.lower() for word in ("stock", "ticker", "analyze", "analysis")):
+            return (
+                "No analyzed stocks are available yet. Run the data update and analysis first, "
+                "then ask about a ticker."
+            )
+
         if ticker is None:
-            return "Tell me which ticker to analyze, for example: 'Explain RELIANCE.NS'."
+            return (
+                "I can answer general questions, or analyze a stock if you give a ticker. "
+                "Try: 'Explain RELIANCE.NS'."
+            )
 
         stock = all_stocks[ticker]
         last_close = None
@@ -536,8 +555,10 @@ def create_app() -> Flask:
                     "content": (
                         "You are Ultron, a local-only market analyst. "
                         "You must never give buy/sell orders or facilitate real trades. "
-                        "You must only explain observations from the provided data context. "
-                        "If the user asks for real-time data, say you are offline."
+                        "You can answer general questions and explain analysis. "
+                        "When answering market questions, stick to provided context and "
+                        "say when data is unavailable or offline. "
+                        "If asked for real-time data, say you are offline."
                     ),
                 },
                 {"role": "system", "content": f"DATA CONTEXT:\n{context}"},
@@ -599,11 +620,24 @@ def create_app() -> Flask:
             needs.append("Ollama is not reachable. Start Ollama to enable full LLM chat.")
         return needs
 
+    def _should_share_needs(message: str, snapshot: dict[str, Any]) -> bool:
+        """Decide when to surface system needs in chat."""
+        msg = (message or "").lower()
+        if any(word in msg for word in ("need", "needs", "requirements", "setup", "status")):
+            return True
+        if not snapshot.get("stocks") and any(word in msg for word in ("stock", "ticker", "analyze", "analysis")):
+            return True
+        return False
+
     def _build_llm_context(ticker: str | None, snapshot: dict[str, Any]) -> str:
         """Build compact context for LLM responses."""
         all_stocks: dict[str, StockViewModel] = snapshot.get("stocks", {})
         if not all_stocks:
-            return "No analyzed stocks are available."
+            return (
+                "No analyzed stocks are available. "
+                "Ultron is local-only and can answer general questions; "
+                "stock analysis needs local CSV data under data/raw/."
+            )
 
         if ticker and ticker in all_stocks:
             stock = all_stocks[ticker]
@@ -628,6 +662,7 @@ def create_app() -> Flask:
         ranked = _ranked_watchlist(list(all_stocks.values()), limit=5)
         lines = [
             "Ultron needs local CSV data under data/raw/, Python 3.10+, and optional Ollama for LLM chat.",
+            "Ultron is read-only: no real trades, no broker APIs.",
             "Top reasoned picks:",
         ]
         for item in ranked:
@@ -2161,7 +2196,8 @@ def create_app() -> Flask:
         llm_reply = _ollama_chat(message, context) if _check_ollama_status() else None
         if llm_reply is None:
             reply = _build_chat_response(message, ticker, snapshot)
-            return jsonify({"reply": reply, "ticker": ticker, "mode": "fallback", "needs": _build_system_needs(snapshot)})
+            needs = _build_system_needs(snapshot) if _should_share_needs(message, snapshot) else []
+            return jsonify({"reply": reply, "ticker": ticker, "mode": "fallback", "needs": needs})
         return jsonify({"reply": llm_reply, "ticker": ticker, "mode": "ollama", "needs": _build_system_needs(snapshot)})
 
     @app.route("/api/simulation/<ticker>")

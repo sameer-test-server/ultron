@@ -10,32 +10,60 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block head_extra %}{% endblock %}
 </head>
-<body class="d-flex flex-column min-vh-100">
+<body class="app-shell">
     <a class="skip-link" href="#mainContent">Skip to main content</a>
-    <header class="navbar navbar-expand-lg sticky-top">
-        <nav class="container-fluid" aria-label="Main navigation">
-            <a class="navbar-brand p-0 me-0 me-lg-2" href="{{ url_for('index') }}" aria-label="Ultron">
-                <h3 class="logo mb-0"><i class="bi bi-cpu-fill"></i> Ultron</h3>
-            </a>
-            <div class="top-links ms-3">
-                <a class="nav-chip {% if request.endpoint == 'index' %}is-active{% endif %}" href="{{ url_for('index') }}">Dashboard</a>
-                <a class="nav-chip {% if request.endpoint == 'ultron_calculator' %}is-active{% endif %}" href="{{ url_for('ultron_calculator') }}">Ultron Calculator</a>
-                <a class="nav-chip {% if request.endpoint == 'watchlist' %}is-active{% endif %}" href="{{ url_for('watchlist') }}">Watchlist</a>
+    <div class="app-grid">
+        <aside class="sidebar" aria-label="Primary">
+            <div class="sidebar-brand">
+                <a href="{{ url_for('index') }}" aria-label="Ultron">
+                    <span class="logo"><i class="bi bi-cpu-fill"></i> Ultron</span>
+                </a>
+                <span class="status-pill">Local Engine</span>
             </div>
-            <div class="ms-auto">
-                <span class="status-pill me-2">Local Engine</span>
-                <span class="navbar-text fw-bold" id="liveClock">--:--:--</span>
+            <nav class="sidebar-nav">
+                <a class="sidebar-link {% if request.endpoint == 'index' %}is-active{% endif %}" href="{{ url_for('index') }}">
+                    <i class="bi bi-grid-1x2-fill"></i> Dashboard
+                </a>
+                <a class="sidebar-link {% if request.endpoint == 'ultron_calculator' %}is-active{% endif %}" href="{{ url_for('ultron_calculator') }}">
+                    <i class="bi bi-calculator-fill"></i> Ultron Calculator
+                </a>
+                <a class="sidebar-link {% if request.endpoint == 'watchlist' %}is-active{% endif %}" href="{{ url_for('watchlist') }}">
+                    <i class="bi bi-bookmark-star-fill"></i> Watchlist
+                </a>
+            </nav>
+            <div class="sidebar-foot">
+                <div class="sidebar-meta">
+                    <span class="meta-label">Local Time</span>
+                    <span class="meta-value" id="liveClock">--:--:--</span>
+                </div>
+                <div class="sidebar-meta">
+                    <span class="meta-label">Mode</span>
+                    <span class="meta-value">Read-Only</span>
+                </div>
             </div>
-        </nav>
-    </header>
+        </aside>
 
-    <main id="mainContent" class="container-fluid flex-grow-1 my-4 main-container" tabindex="-1">
-        {% block content %}{% endblock %}
-    </main>
+        <div class="app-main d-flex flex-column min-vh-100">
+            <header class="topbar">
+                <div>
+                    <p class="topbar-kicker">Ultron Analyst</p>
+                    <h1 class="topbar-title">{% block page_title %}Dashboard{% endblock %}</h1>
+                </div>
+                <div class="topbar-actions">
+                    <span class="topbar-chip">Local-Only</span>
+                    <span class="topbar-chip">No Trades</span>
+                </div>
+            </header>
 
-    <footer class="py-3 mt-auto text-center">
-        <p class="text-body-secondary small mb-0">Ultron is a local analysis system. This is not a trading platform.</p>
-    </footer>
+            <main id="mainContent" class="content" tabindex="-1">
+                {% block content %}{% endblock %}
+            </main>
+
+            <footer class="py-3 text-center">
+                <p class="text-body-secondary small mb-0">Ultron is a local analysis system. This is not a trading platform.</p>
+            </footer>
+        </div>
+    </div>
 
     <script src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
     <script>
