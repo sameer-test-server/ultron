@@ -4,6 +4,11 @@
 
 It ingests daily OHLCV data, computes indicators, classifies regimes, runs multi‑strategy backtests, and presents results in a modern offline UI with explainable chat and PDF reports. No real trades. No broker APIs. No cloud services.
 
+```
+                      ▲  ULTRON  ▲
+   Local‑Only Research | Explainable Intelligence | Safe Simulation
+```
+
 ---
 
 ## Why Ultron
@@ -16,6 +21,14 @@ It ingests daily OHLCV data, computes indicators, classifies regimes, runs multi
 
 ---
 
+## The Ultron Loop
+
+```
+Raw OHLCV → Indicators → Regime → Reasoning → Scenarios → Paper Trades → UI + PDF
+```
+
+---
+
 ## What You’ll See (UI)
 
 - **Dashboard**: Ranked tickers with regime, confidence, and hypothetical returns
@@ -23,6 +36,10 @@ It ingests daily OHLCV data, computes indicators, classifies regimes, runs multi
 - **Watchlist**: Your short list, stored locally
 - **Explainable Chat**: Ask “Explain RELIANCE.NS” with local Ollama
 - **PDF Export**: Shareable analysis reports (local only)
+
+```
+Signals are evidence-backed. Results are reproducible. Everything is local.
+```
 
 ---
 
@@ -50,7 +67,7 @@ It ingests daily OHLCV data, computes indicators, classifies regimes, runs multi
 - Focus Mode (single‑ticker deep view)
 - Explainable chat with local Ollama (Mistral)
 - Offline‑ready assets (Bootstrap, icons, fonts vendored locally)
- - PDF export per stock (reportlab)
+- PDF export per stock (reportlab)
 
 ### Reporting
 - PDF exports per stock
@@ -152,15 +169,6 @@ ultron/
 
 ---
 
-## Safety Guarantees
-
-- **No real trades**
-- **No broker APIs**
-- **Read-only analysis + simulation**
-- **Local-only execution**
-
----
-
 ## Recent Additions (March 2026)
 
 - Reasoning engine with explainable evidence
@@ -171,7 +179,7 @@ ultron/
 - Focus mode + watchlist + chat memory
 - Daily summary reports (MD + PDF)
 - Fully offline UI assets
- - PDF export per stock
+- PDF export per stock
 
 ---
 
