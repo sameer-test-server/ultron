@@ -1,112 +1,64 @@
-# Ultron UI/UX Roadmap
+# Ultron Roadmap (Updated)
 
-Date: 2026-03-10
+Date: 2026-03-12
 
-## Ratings (Brutally Honest)
-
+## Current Ratings
 Scale: 1–10 (10 = excellent)
 
-- Visual design (layout, styling consistency): **6/10**
-- UX flow (clarity of task paths, hierarchy): **5/10**
-- Information architecture (panel organization, scanning): **5/10**
-- Performance (page weight, chart load, responsiveness): **6/10**
-- Accessibility (contrast, keyboard nav, semantics): **4/10**
-- Local-only compliance (no cloud/CDNs): **3/10**
-- Reliability (error handling, offline behavior): **6/10**
-- Responsiveness (mobile/desktop fit): **6/10**
-
-## Remarks
-
-### What’s working
-- The UI is feature-rich (dashboard, live tracker, stock view, simulation lab, projection lab).
-- Visuals are modern and attractive.
-- Chat integration adds interactivity and explainability.
-- Analysis and simulation data are surfaced clearly on detail pages.
-
-### What’s hurting UX
-- Too much content on the main dashboard without a clear primary action.
-- Mixed visual language (Bootstrap + custom theme + external CDNs).
-- Live tracker and multiple tables compete for attention.
-- The UI does not clearly separate **observation** vs **hypothesis** vs **simulation**.
-
-### Risky/Outdated
-- External CDNs break local-only requirement.
-- Live quotes use network calls (yfinance) unless explicitly disabled.
-- Accessibility and keyboard navigation are not reviewed.
+- Visual design: **8/10**
+- UX flow: **7/10**
+- Information architecture: **7/10**
+- Performance: **8/10**
+- Accessibility: **7/10**
+- Local-only compliance: **9/10**
+- Reliability: **8/10**
+- Responsiveness: **8/10**
 
 ---
 
-## What’s Done So Far
+## What’s Completed
 
-### Core functionality
-- Data ingestion with multi-source fallback (Yahoo → NSE Bhavcopy → Stooq).
-- Local analysis pipeline with indicators, regime detection, explainable insights.
-- Paper trading simulation with risk controls and metrics.
-- Chart generation + PDF export.
+### Core Intelligence
+- Reasoning engine with confidence + evidence.
+- Scenario engine (trend / mean-reversion / breakout).
+- Signal reliability ledger.
+- Risk suite (drawdown, tail risk, liquidity score).
+- Research lab grid runner for parameter optimization.
 
-### UI functionality
-- Dashboard with filters/sorting, summary cards, and ranked watchlist.
-- Stock detail with interactive Plotly charts, simulation lab, projection lab.
-- Chat endpoint + UI panel (with Ollama + fallback logic).
-- Offline mode switch for live quotes.
+### Data Integrity
+- Data quality checks (freshness, gaps, missing days).
+- Daily Markdown + PDF summary report generation.
 
----
-
-## What Needs To Be Done
-
-### Critical (must do for production-grade)
-1. **Remove all CDN dependencies**
-   - Bundle Bootstrap, fonts, and icons locally.
-   - Eliminate external Google Fonts/CDN scripts.
-
-2. **Make local-only mode fully enforced**
-   - Disable live quotes by default.
-   - Ensure no network calls happen when `ULTRON_OFFLINE_MODE=true`.
-
-3. **Simplify dashboard hierarchy**
-   - Reduce visible panels on first view.
-   - Add a clear “primary” section (e.g., watchlist + analysis summary).
-
-4. **Accessibility pass**
-   - Improve contrast, keyboard focus states, aria labels.
-   - Validate table headings and landmark structure.
+### UI/UX
+- Local-only assets (Bootstrap + fonts + icons vendored).
+- Dashboard simplification + pagination.
+- Focus mode for distraction-free ticker view.
+- Watchlist with notes (local JSON storage).
+- Chat + Ollama integration + memory hints.
+- Accessibility improvements (skip links, aria labels, focus states).
+- PDF export per stock (local reportlab).
+- Interactive charts with Plotly and cached outputs.
 
 ---
 
-## Recommended Enhancements (High Impact)
+## Remaining (Optional / Nice-to-Have)
 
-1. **UX restructuring**
-   - Split dashboard into tabs: Overview | Live | Models | Labs.
-   - Add tooltips for risk/regime/simulation terms.
-
-2. **Performance**
-   - Lazy-load heavy tables and chart content.
-   - Cache interactive chart HTML and only regenerate on data change.
-
-3. **Chat upgrade**
-   - Add short-term memory (last N messages) in context.
-   - Provide guided quick questions on the chat panel.
-
-4. **Consistency**
-   - Unify typography and color system.
-   - Remove unused elements and keep a clean visual grid.
+1. **Portfolio-level PDF summary**
+2. **Exportable CSV snapshots of analysis results**
+3. **Theme toggle (light/dark) using local assets**
+4. **Backtesting performance charts (equity curves)**
+5. **Walk-forward validation reports**
 
 ---
 
-## Optional Enhancements (Nice to Have)
+## Next Suggested Enhancements
 
-- Portfolio-level PDF summary.
-- Per-stock “data freshness” badge and health warnings.
-- Exportable CSV for analysis outputs.
-- UI theme toggle (light/dark) with local assets only.
+1. Add CI tests (offline, deterministic).
+2. Add stronger offline enforcement (kill all external calls automatically).
+3. Build a small API for exporting analysis to other local tools.
+4. Add portfolio-level PDF summary.
+5. Add performance charts (equity curve, drawdown timeline).
 
 ---
 
-## Next Actions (Suggested)
-
-1. Local asset bundling for Bootstrap/fonts/icons.
-2. Disable live quotes by default and gate with explicit toggle.
-3. Dashboard redesign: clarify primary flow and reduce panels.
-4. Accessibility improvements and contrast audit.
-
-If you want, I can start implementing these in order.
+Ultron is now a full local-first research platform with strong UI/UX, explainable analysis, and powerful simulations.

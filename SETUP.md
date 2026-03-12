@@ -1,6 +1,6 @@
 # Ultron Data Loader: Setup & Configuration
 
-This guide helps you set up Ultron for daily automated stock data updates with alerts and multi-source fallback recovery.
+This guide helps you set up Ultron for daily automated stock data updates with alerts and multi-source fallback recovery. It also includes local UI and optional chat setup.
 
 ## Quick Start (Local Testing)
 
@@ -16,6 +16,25 @@ python scripts/run_ultron.py --tickers RELIANCE.NS,INFY.NS,TCS.NS --parallel 2
 # Check logs
 tail -f logs/ultron.log
 ```
+
+## Run the Local UI
+
+```bash
+export ULTRON_OFFLINE_MODE=true
+python ui/app.py
+```
+
+Open `http://127.0.0.1:5000` in your browser.
+
+## Optional: Local Chat (Ollama)
+
+```bash
+export OLLAMA_URL="http://127.0.0.1:11434"
+export OLLAMA_MODEL="mistral"
+python ui/app.py
+```
+
+If Ollama is not running, Ultron falls back to rule-based explanations.
 
 ## Optional: Email Alerts on Failed Tickers
 

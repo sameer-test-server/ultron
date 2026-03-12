@@ -36,6 +36,13 @@
 - ✅ **SETUP.md**: Detailed configuration instructions (Gmail alerts, cron, systemd, fallbacks)
 - ✅ **PRODUCTION_CHECKLIST.md**: This file — readiness verification
 
+### UI & Research (Local-Only)
+- ✅ **Flask UI**: Dashboard + stock detail pages (read-only)
+- ✅ **PDF Exports**: Per-stock reports saved locally in `reports/pdf/`
+- ✅ **Interactive Charts**: Plotly charts with cached render
+- ✅ **Local LLM Chat (Optional)**: Ollama integration with safe fallback
+- ✅ **Offline Assets**: Bootstrap, icons, and fonts vendored locally
+
 ## 🔲 Next Steps (User Action Items)
 
 ### Step 1: Set Up Email Alerts (5 minutes)
